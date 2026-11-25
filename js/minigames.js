@@ -2,7 +2,7 @@
 const MG_INFO = [
   { id: 'duel', name: 'Duel de cowboys', rules: 'Attendez le signal « FEU ! » puis appuyez sur ESPACE (ou cliquez) le plus vite possible. Trop tôt = perdu ! Premier à 2 manches.' },
   { id: 'yams', name: 'Yams express', rules: '3 tours chacun. Jusqu\'à 3 lancers par tour, cliquez sur les dés pour les garder. Le meilleur combo compte (Yams = 50 !). Le plus gros total gagne.' },
-  { id: 'palet', name: 'Palet sur nuage', rules: '3 palets chacun. Cliquez sur votre palet, tirez en arrière comme un lance-pierre et relâchez. Le palet le plus proche du cœur gagne !' },
+  { id: 'palet', name: 'Palet sur nuage', rules: '3 palets chacun. Cliquez n\'importe où, tirez vers l\'arrière comme un lance-pierre et relâchez : plus vous tirez loin, plus c\'est fort. Le palet le plus proche du cœur gagne !' },
   { id: 'quiestce', name: 'Qui est-ce ?', rules: 'Chacun a un personnage secret. À votre tour, posez une question (les cartes s\'éliminent toutes seules) ou tentez de deviner. Mauvaise réponse = défaite !' },
   { id: 'hockey', name: 'Air hockey', rules: 'Déplacez votre palet avec la souris (moitié du bas). Premier à 5 buts !' },
 ];
@@ -205,21 +205,23 @@ class YamsGame extends MiniGame {
 }
 
 // ---------------- 3. PALET SUR NUAGE ----------------
-const PAL = { x: 300, y: 70, w: 360, h: 540, tx: 480, ty: 170, r: 15, start: { x: 480, y: 545 } };
+const PAL = { x: 300, y: 70, w: 360, h: 540, tx: 480, ty: 170, r: 15, start: { x: 480, y: 545 }, k: 3.2, max: 900 };
 class PaletGame extends MiniGame {
   constructor(o) { super(o); this.pucks = []; this.shot = 0; this.turn = 'blue'; this.moving = false; this.drag = null; this.waitSettle = false; this.final = null; }
   get myTurn() { return this.started && !this.result && !this.moving && !this.waitSettle && this.turn === this.myRole && this.shot < 6; }
-  onMouseDown(x, y) {
-    if (!this.myTurn) return;
-    if (Math.hypot(x - PAL.start.x, y - PAL.start.y) < 40) this.drag = { x, y };
+  // On clique n'importe où, on tire dans le sens opposé au tir (lance-pierre) : plus on tire loin, plus c'est fort
+  shotVec(x, y) {
+    let vx = (this.drag.x - x) * PAL.k, vy = (this.drag.y - y) * PAL.k;
+    const sp = Math.hypot(vx, vy); if (sp > PAL.max) { vx *= PAL.max / sp; vy *= PAL.max / sp; }
+    return { vx, vy, sp: Math.min(sp, PAL.max) };
   }
+  onMouseDown(x, y) { if (this.myTurn) this.drag = { x, y }; }
   onMouseUp(x, y) {
     if (!this.drag) return;
-    let vx = (PAL.start.x - x) * 4.2, vy = (PAL.start.y - y) * 4.2;
-    const sp = Math.hypot(vx, vy); if (sp > 1050) { vx *= 1050 / sp; vy *= 1050 / sp; }
+    const v = this.shotVec(x, y);
     this.drag = null;
-    if (sp < 60) return;
-    this.send({ t: 'shot', vx, vy }); this.applyShot(vx, vy, true);
+    if (v.sp < 60) return;
+    this.send({ t: 'shot', vx: v.vx, vy: v.vy }); this.applyShot(v.vx, v.vy, true);
   }
   applyShot(vx, vy, mine) {
     this.pucks.push({ x: PAL.start.x, y: PAL.start.y, vx, vy, role: this.turn });
@@ -292,12 +294,21 @@ class PaletGame extends MiniGame {
     if (this.shot < 6 && !this.moving && !this.waitSettle) {
       this.drawPuck(ctx, PAL.start.x, PAL.start.y, this.turn, 0.85);
       if (this.drag && UI.mx >= 0) {
-        ctx.save(); ctx.strokeStyle = COLORS[this.turn].dark; ctx.lineWidth = 3; ctx.setLineDash([6, 6]);
-        const ex = PAL.start.x + (PAL.start.x - UI.mx) * 0.6, ey = PAL.start.y + (PAL.start.y - UI.my) * 0.6;
-        ctx.beginPath(); ctx.moveTo(PAL.start.x, PAL.start.y); ctx.lineTo(ex, ey); ctx.stroke(); ctx.restore();
+        const v = this.shotVec(UI.mx, UI.my), pw = v.sp / PAL.max;
+        ctx.save(); ctx.strokeStyle = COLORS[this.turn].dark; ctx.lineWidth = 4; ctx.setLineDash([8, 8]);
+        const L = 60 + pw * 240, a = Math.atan2(v.vy, v.vx);
+        ctx.beginPath(); ctx.moveTo(PAL.start.x, PAL.start.y); ctx.lineTo(PAL.start.x + Math.cos(a) * L, PAL.start.y + Math.sin(a) * L); ctx.stroke();
+        ctx.setLineDash([]); ctx.strokeStyle = 'rgba(160,100,180,0.5)'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(this.drag.x, this.drag.y); ctx.lineTo(UI.mx, UI.my); ctx.stroke();
+        ctx.restore();
+        // jauge de puissance
+        UI.panel(ctx, 40, 200, 60, 300, 0.85);
+        const gh = 260 * pw; const g = ctx.createLinearGradient(0, 480, 0, 220); g.addColorStop(0, '#8fd3ff'); g.addColorStop(0.6, '#ff9fd0'); g.addColorStop(1, '#ff4f8b');
+        ctx.fillStyle = g; Art.roundRect(ctx, 55, 480 - gh, 30, Math.max(4, gh), 8); ctx.fill();
+        UI.text(ctx, Math.round(pw * 100) + '%', 70, 520, 15, '#7a3f8e');
       }
     }
-    let txt = this.final ? `${this.names[this.final.w]} gagne avec ${this.final.pts} palet(s) au plus près !` : this.myTurn ? 'À toi ! Clique sur ton palet et tire en arrière' : this.moving ? 'Ça glisse…' : `Au tour de ${this.names[this.turn]}…`;
+    let txt = this.final ? `${this.names[this.final.w]} gagne avec ${this.final.pts} palet(s) au plus près !` : this.myTurn ? 'À toi ! Clique n\'importe où, tire vers l\'arrière et relâche' : this.moving ? 'Ça glisse…' : `Au tour de ${this.names[this.turn]}…`;
     UI.panel(ctx, 680, 260, 260, 120, 0.85); UI.wrap(ctx, txt, 810, 300, 230, 24, 17, '#7a3f8e');
   }
   drawPuck(ctx, x, y, role, a) {
@@ -325,14 +336,17 @@ class QuiEstCeGame extends MiniGame {
   startData() {
     const seed = Math.floor(Math.random() * 1e9);
     const sb = Math.floor(Math.random() * 16); let sp = Math.floor(Math.random() * 16); if (sp === sb) sp = (sp + 5) % 16;
-    return { seed, secret: { blue: sb, pink: sp } };
+    // L'hôte tire tout et envoie la liste complète : les deux écrans ont exactement les mêmes cartes
+    const R = rng(seed);
+    const names = QE_NAMES.slice();
+    for (let i = names.length - 1; i > 0; i--) { const j = Math.floor(R() * (i + 1)); [names[i], names[j]] = [names[j], names[i]]; }
+    const chars = [];
+    for (let i = 0; i < 16; i++) chars.push({ name: names[i], animal: QE_ANIMALS[i % 4], color: Math.floor(R() * 4), hat: R() < 0.4, glasses: R() < 0.4, bow: R() < 0.4 });
+    for (let i = 15; i > 0; i--) { const j = Math.floor(R() * (i + 1)); [chars[i], chars[j]] = [chars[j], chars[i]]; }
+    return { chars, secret: { blue: sb, pink: sp } };
   }
   onStart(d) {
-    const R = rng(d.seed);
-    const names = QE_NAMES.slice().sort(() => R() - 0.5);
-    this.chars = [];
-    for (let i = 0; i < 16; i++) this.chars.push({ name: names[i], animal: QE_ANIMALS[i % 4], color: Math.floor(R() * 4), hat: R() < 0.4, glasses: R() < 0.4, bow: R() < 0.4 });
-    for (let i = 15; i > 0; i--) { const j = Math.floor(R() * (i + 1)); [this.chars[i], this.chars[j]] = [this.chars[j], this.chars[i]]; }
+    this.chars = d.chars.map((c) => Object.assign({}, c));
     this.secret = d.secret; this.elim = new Array(16).fill(false);
   }
   get myTurn() { return this.started && !this.result && this.turn === this.myRole; }
@@ -488,7 +502,7 @@ class HockeyGame extends MiniGame {
     if (this.score[0] >= 5) setTimeout(() => this.end(this.hostRole), 800);
     if (this.score[1] >= 5) setTimeout(() => this.end(this.hostRole === 'blue' ? 'pink' : 'blue'), 800);
   }
-  onGoal(who) { this.flash = `BUUUT de ${this.names[who]} !`; this.flashT = 1.5; Sfx.play(who === this.myRole ? 'rare' : 'lose'); }
+  onGoal(who) { this.flash = `BUUUT de ${this.names[who]} !`; this.flashT = 1.5; Sfx.play(who === this.myRole ? 'goal' : 'lose'); }
   onNet(d) {
     if (this.netBase(d)) return;
     if (d.t === 'pad' && Net.isHost) { this.cp.x = d.x; this.cp.y = d.y; this.clampPad(this.cp, true); }

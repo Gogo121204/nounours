@@ -140,8 +140,17 @@ function go(screen, idx) {
 }
 function persistHost() { if (Net.isHost) { save.host = G.host; persist(); } }
 
+function startTransition(title, sub, kind) {
+  G.trans = { t: 0, title, sub, kind: kind || 'level' };
+  Sfx.play('whoosh');
+}
+
 function applyGo(screen, idx) {
   G.screen = screen; G.mg = null; G.mgResult = null; G.result = null;
+  if (screen === 'level') { Sfx.setTrack('calm'); startTransition(`Niveau ${idx + 1}`, LEVELS[idx].name, 'level'); }
+  else if (screen === 'minigame') { Sfx.setTrack('mini'); startTransition('Mini-jeu duel !', MG_INFO[idx].name, 'mg'); }
+  else if (screen === 'final') { Sfx.setTrack('final'); startTransition('Le grand final', 'Bravo les nounours !', 'final'); }
+  else { Sfx.setTrack('calm'); if (screen === 'map') startTransition('', '', 'quick'); }
   if (screen === 'level') {
     G.levelIdx = idx;
     G.level = new Level(LEVELS[idx], { myRole: G.myRole, names: G.names, outfits: G.outfits, onEvent: onLevelEvent });
@@ -155,7 +164,8 @@ function applyGo(screen, idx) {
 
 function onLevelEvent(type, res) {
   if (type !== 'complete') return;
-  G.result = res; G.screen = 'result';
+  G.result = res; G.screen = 'result'; G.resT = 0; G.coinShown = 0;
+  Sfx.play('fanfare'); setTimeout(() => Sfx.play('rank'), 900);
   // gains personnels
   const mine = res[G.myRole];
   G.gains = mine.got + (mine.rare ? 10 : 0);
@@ -203,7 +213,7 @@ function drawMap() {
     const a = MAP_NODES[m * 2 + 1], b = MAP_NODES[Math.min(9, m * 2 + 2)];
     const x = m === 4 ? a[0] + 70 : (a[0] + b[0]) / 2 + 30, y = m === 4 ? a[1] + 70 : (a[1] + b[1]) / 2;
     const open = !!h.best[m * 2 + 1];
-    ctx.save(); ctx.globalAlpha = open ? 1 : 0.4;
+    ctx.save(); ctx.globalAlpha = open ? 1 : 0.7;
     Art.sparkle(ctx, x, y, 20 + Math.sin(G.t * 3 + m) * 2, open ? '#ffd34d' : '#ccc');
     UI.text(ctx, MG_INFO[m].name, x, y + 30, 13, '#8a4f9e');
     if (h.mgDone && h.mgDone[m]) UI.text(ctx, '✓', x, y + 1, 14, '#fff');
@@ -254,7 +264,9 @@ function drawResult() {
     d.subs.slice(0, 7).forEach((s, k) => Art.item(ctx, s, x - (Math.min(7, d.subs.length) - 1) * 13 + k * 26, 452, G.t, 20));
     if (d.rare != null) UI.text(ctx, d.rare ? `★ ${ITEM_NAMES[d.rareSub]} trouvé(e) !` : `★ ${ITEM_NAMES[d.rareSub]} raté(e)…`, x, 482, 14, d.rare ? '#ff4f8b' : '#a090b0');
   }
-  UI.text(ctx, `+${G.gains} pour ta boutique 🛍️`, W / 2, 330, 16, '#a070b0');
+  G.resT += 1 / 60;
+  if (G.resT > 1.2 && G.coinShown < G.gains && Math.floor(G.resT * 12) !== G.lastCoinTick) { G.lastCoinTick = Math.floor(G.resT * 12); G.coinShown++; Sfx.play('coin'); }
+  UI.text(ctx, `+${G.coinShown} pour ta boutique 🛍️`, W / 2, 330, 16, '#a070b0');
   if (Net.isHost) {
     const next = (G.levelIdx + 1) % 2 === 0 ? `Mini-jeu : ${MG_INFO[(G.levelIdx + 1) / 2 - 1].name}` : 'Niveau suivant';
     UI.btn(ctx, W / 2 + 10, 500, 250, 46, next + ' ➜', afterLevel, { size: 15 });
@@ -307,7 +319,7 @@ function drawShop() {
     Art.teddy(ctx, x + 70, y + 92, G.myRole, { scale: 1.9, outfit: o, t: G.t });
     UI.text(ctx, it.name, x + 70, y + 108, 13, '#7a3f8e');
     const owned = save.owned.includes(it.id), worn = save.outfit[it.slot] === it.id;
-    if (!owned) UI.btn(ctx, x + 14, y + 120, 112, 30, `Acheter · ${it.price}`, () => { if (save.wallet >= it.price) { save.wallet -= it.price; save.owned.push(it.id); setOutfit(it.slot, it.id); Sfx.play('rare'); } }, { size: 13, disabled: save.wallet < it.price });
+    if (!owned) UI.btn(ctx, x + 14, y + 120, 112, 30, `Acheter · ${it.price}`, () => { if (save.wallet >= it.price) { save.wallet -= it.price; save.owned.push(it.id); setOutfit(it.slot, it.id); Sfx.play('buy'); } }, { size: 13, disabled: save.wallet < it.price });
     else UI.btn(ctx, x + 14, y + 120, 112, 30, worn ? 'Retirer' : 'Porter', () => setOutfit(it.slot, worn ? null : it.id), { size: 13, color: worn ? '#c0a0d0' : '#9b7cf0' });
   });
   UI.btn(ctx, W - 200, 590, 180, 40, '← Retour', () => { G.screen = 'map'; }, { size: 15, color: '#b9a0f5' });
@@ -355,11 +367,11 @@ function frame(now) {
   switch (G.screen) {
     case 'menu': Art.background(ctx, W, H, G.t, 0); Art.unicorn(ctx, 380 + Math.sin(G.t) * 40, 470, 200, G.t, 1); break;
     case 'map': drawMap(); break;
-    case 'level': G.level.update(dt, input); G.level.draw(ctx, W, H); drawEmoteBar(); break;
+    case 'level': if (!G.trans || G.trans.t > 1.1) G.level.update(dt, input); G.level.draw(ctx, W, H); drawEmoteBar(); break;
     case 'result': if (G.level) G.level.update(dt, {}); drawResult(); break;
     case 'minigame':
       if (G.mg) {
-        if (!G.mgResult) G.mg.update(dt, input); else G.mg.t += dt;
+        if (!G.mgResult && (!G.trans || G.trans.t > 1.1)) G.mg.update(dt, input); else G.mg.t += dt;
         G.mg.draw(ctx, W, H);
         if (input.emote != null) { G.mgBubble = { role: G.myRole, text: EMOTES[input.emote], until: G.t + 2.5 }; Net.send('mgemote', { i: input.emote }); Sfx.play('emote'); }
         if (G.mgBubble && G.mgBubble.until > G.t) Art.bubble(ctx, G.mgBubble.role === 'blue' ? 140 : W - 140, 110, G.mgBubble.text);
@@ -369,6 +381,7 @@ function frame(now) {
     case 'shop': drawShop(); break;
     case 'final': drawFinal(); break;
   }
+  if (G.trans) drawTransition(dt);
   if (G.disconnected) {
     ctx.fillStyle = 'rgba(80,40,90,0.6)'; ctx.fillRect(0, 0, W, H);
     UI.panel(ctx, 230, 240, 500, 140);
@@ -403,3 +416,36 @@ requestAnimationFrame(frame);
   if (p.get('auto') === 'host') { chosenRole = p.get('role') || 'pink'; $('name').value = p.get('name') || 'Hôte'; const c = p.get('code') || 'TEST'; Net.makeCode = () => c; $('btnHost').click(); }
   if (p.get('auto') === 'join') { $('name').value = p.get('name') || 'Invité'; $('joinCode').value = p.get('code') || 'TEST'; setTimeout(() => $('btnJoin').click(), 300); }
 })();
+
+// Écran de transition : rideau de nuages + titre
+function drawTransition(dt) {
+  const tr = G.trans; tr.t += dt;
+  const dur = tr.kind === 'quick' ? 0.7 : 2.0;
+  if (tr.t > dur) { G.trans = null; return; }
+  const p = tr.t / dur;
+  // couverture : 1 au début, s'ouvre sur la fin
+  const open = tr.kind === 'quick' ? p : Math.max(0, (p - 0.6) / 0.4);
+  const cover = 1 - open * open;
+  ctx.save();
+  const half = (W / 2 + 120) * cover;
+  for (const side of [-1, 1]) {
+    const x0 = side < 0 ? half - (W / 2 + 120) : W - half;
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#ffd3ea'); g.addColorStop(1, '#d8c8ff');
+    ctx.fillStyle = g; ctx.fillRect(x0, 0, W / 2 + 120, H);
+    ctx.fillStyle = '#fff';
+    const edge = side < 0 ? x0 + W / 2 + 120 : x0;
+    if (cover < 0.97) for (let i = 0; i < 9; i++) { ctx.beginPath(); ctx.arc(edge, i * 80 + 20, 60, 0, Math.PI * 2); ctx.fill(); }
+  }
+  if (tr.title && cover > 0.6) {
+    ctx.globalAlpha = Math.min(1, (cover - 0.6) / 0.3);
+    const pop = 1 + Math.max(0, 0.15 - tr.t * 0.4);
+    ctx.translate(W / 2, H / 2); ctx.scale(pop, pop); ctx.translate(-W / 2, -H / 2);
+    if (tr.kind === 'mg') { Art.teddy(ctx, W / 2 - 170, H / 2 + 70, 'blue', { scale: 2.6, outfit: G.outfits.blue, t: G.t, face: 1 }); Art.teddy(ctx, W / 2 + 170, H / 2 + 70, 'pink', { scale: 2.6, outfit: G.outfits.pink, t: G.t, face: -1 }); UI.title(ctx, 'VS', W / 2, H / 2 + 40, 50); }
+    else if (tr.kind === 'level') Art.unicorn(ctx, W / 2 - 70 + Math.sin(G.t * 2) * 10, H / 2 + 50, 140, G.t, 1);
+    else { for (let i = 0; i < 8; i++) Art.heart(ctx, W / 2 + Math.cos(i * 0.8 + G.t) * 200, H / 2 + 60 + Math.sin(i * 0.8 + G.t) * 40, 22, i % 2 ? '#ff6fae' : '#b07cf0'); }
+    UI.title(ctx, tr.title, W / 2, H / 2 - 70, 54);
+    UI.text(ctx, tr.sub, W / 2, H / 2 - 22, 24, '#8a4f9e');
+  }
+  ctx.restore();
+}

@@ -34,6 +34,7 @@ const UI = {
   text(ctx, s, x, y, size, col, align, bold = true) {
     ctx.save(); ctx.font = `${bold ? 'bold ' : ''}${size}px "Fredoka","Trebuchet MS",sans-serif`;
     ctx.fillStyle = col || '#7a3f8e'; ctx.textAlign = align || 'center'; ctx.textBaseline = 'middle';
+    ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(255,255,255,0.92)'; ctx.lineJoin = 'round'; ctx.strokeText(s, x, y);
     ctx.fillText(s, x, y); ctx.restore();
   },
   title(ctx, s, x, y, size) {

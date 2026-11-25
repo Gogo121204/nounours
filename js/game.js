@@ -1,6 +1,6 @@
 // Moteur de plateforme coopératif
 const T = 32, PW = 22, PH = 30;
-const SPEED = 215, ACC = 2600, AIR_ACC = 1700, JUMP = 640, GRAV = 1800, MAXFALL = 900, BOUNCE = 930;
+const SPEED = 210, ACC = 1500, DEC = 1900, AIR_ACC = 1050, AIR_DEC = 350, JUMP = 545, HOLD_TIME = 0.16, HOLD_GRAV = 0.5, CUT_VY = 240, GRAV = 1800, MAXFALL = 820, BOUNCE = 930;
 const DEADLY = { blue: 'fc', pink: 'gc' };
 const ITEM_ROLE = { b: 'blue', a: 'blue', p: 'pink', r: 'pink' };
 
@@ -19,7 +19,7 @@ class Level {
     this.pools = []; this.bounces = [];
     for (let y = 0; y < LH; y++) for (let x = 0; x < LW; x++) {
       const ch = this.grid[y][x];
-      if ('fgc'.includes(ch)) this.pools.push({ x, y, k: ch });
+      if ('fgc'.includes(ch)) this.pools.push({ x, y, k: ch, l: !'fgc'.includes(this.grid[y][x - 1]), r: !'fgc'.includes(this.grid[y][x + 1]) });
       if (ch === 'J') this.bounces.push({ x, y, sq: 0 });
     }
     this.gt = 0; // temps global (animations)
@@ -115,7 +115,7 @@ class Level {
       const br = { x: b.x * T + 3, y: b.y * T + 20, w: 26, h: 12 };
       const was = b.pressed;
       b.pressed = overlap(mr, br) || overlap(or, br);
-      if (b.pressed && !was) Sfx.play('click');
+      if (b.pressed && !was) Sfx.play('press');
     }
     // plateformes mobiles
     for (const p of this.platforms) {
@@ -158,6 +158,10 @@ class Level {
     if (input.emote != null) this.emote(this.myRole, input.emote, true);
 
     // portes (l'hôte arbitre)
+    const myD = this.doors[this.myRole], cxm = mr2.x + PW / 2, cym = mr2.y + PH / 2;
+    const inMine = cxm > myD.x && cxm < myD.x + myD.w && cym > myD.y && cym < myD.y + myD.h;
+    if (inMine && !this.wasInDoor) Sfx.play('door');
+    this.wasInDoor = inMine;
     if (Net.isHost) {
       const inDoor = (pr, role) => { const d = this.doors[role]; const cx = pr.x + PW / 2, cy = pr.y + PH / 2; return cx > d.x && cx < d.x + d.w && cy > d.y && cy < d.y + d.h; };
       if (inDoor(mr2, this.myRole) && inDoor(or, this.otherRole) && !o.dead) {
@@ -200,8 +204,11 @@ class Level {
     // horizontal
     let dir = (input.right ? 1 : 0) - (input.left ? 1 : 0);
     const acc = me.onGround ? ACC : AIR_ACC;
-    if (dir) { me.vx += dir * acc * dt; me.face = dir; }
-    else { const dec = acc * dt; me.vx = Math.abs(me.vx) <= dec ? 0 : me.vx - Math.sign(me.vx) * dec; }
+    if (dir) {
+      // demi-tour plus franc au sol, inertie conservée en l'air
+      const turning = Math.sign(me.vx) === -dir && me.vx !== 0;
+      me.vx += dir * (turning ? (me.onGround ? DEC : DEC * 0.9) : acc) * dt; me.face = dir;
+    } else { const dec = (me.onGround ? DEC : AIR_DEC) * dt; me.vx = Math.abs(me.vx) <= dec ? 0 : me.vx - Math.sign(me.vx) * dec; }
     me.vx = Math.max(-SPEED, Math.min(SPEED, me.vx));
     if (me.onGround && Math.abs(me.vx) > 10) me.walk += dt * 14; else if (me.onGround) me.walk = 0;
     // saut
@@ -209,11 +216,16 @@ class Level {
     me.jumpBuf -= dt;
     me.coyote = me.onGround ? 0.09 : me.coyote - dt;
     if (me.jumpBuf > 0 && me.coyote > 0) {
-      me.vy = -JUMP; me.jumpBuf = 0; me.coyote = 0; me.onGround = false; me.ground = null; Sfx.play('jump');
+      me.vy = -JUMP; me.jumpBuf = 0; me.coyote = 0; me.onGround = false; me.ground = null; me.holdT = HOLD_TIME; me.jumping = true; Sfx.play('jump');
     }
-    me.vy += GRAV * dt;
-    if (me.vy >= 0) me.bouncing = false;
-    if (!input.jump && me.vy < -250 && !me.bouncing) me.vy += GRAV * dt * 1.2;
+    // saut progressif : plus on garde la touche, plus on monte (et donc plus on va loin)
+    if (me.jumping && input.jump && me.holdT > 0 && me.vy < 0) { me.holdT -= dt; me.vy += GRAV * HOLD_GRAV * dt; }
+    else {
+      if (me.jumping && !input.jump && me.vy < -CUT_VY) me.vy = -CUT_VY;
+      me.holdT = 0;
+      me.vy += GRAV * dt;
+    }
+    if (me.vy >= 0) { me.bouncing = false; me.jumping = false; }
     me.vy = Math.min(me.vy, MAXFALL);
 
     me.x += me.vx * dt;
@@ -256,7 +268,8 @@ class Level {
       if (deadly) { this.die(true); return; }
       if (bounce) { me.vy = -BOUNCE; me.bouncing = true; me.onGround = false; bounce.sq = 1; Sfx.play('bounce'); }
     }
-    if (!wasGround && me.onGround) this.puff(me.x + PW / 2, me.y + PH);
+    if (!wasGround && me.onGround) { this.puff(me.x + PW / 2, me.y + PH); if (this.lastFall > 250) Sfx.play('land'); }
+    if (!me.onGround) this.lastFall = me.vy;
   }
 
   takeItem(id) {
@@ -331,7 +344,7 @@ class Level {
       else Art.platform(ctx, p.x, p.y, p.w, p.h, p.color);
     }
     ctx.drawImage(this.tiles, 0, 0);
-    for (const pl of this.pools) Art.pool(ctx, pl.k, pl.x * T, pl.y * T, T, t, pl.x);
+    for (const pl of this.pools) Art.pool(ctx, pl.k, pl.x * T, pl.y * T, T, t, pl.x, pl.l, pl.r);
     for (const b of this.bounces) Art.bounce(ctx, b.x * T, b.y * T, T, t, b.sq);
     const mr = this.playerRect(this.me), or = this.playerRect(this.other);
     const inD = (r, role) => { const d = this.doors[role]; return overlap(r, d); };
@@ -346,24 +359,24 @@ class Level {
       if (it.taken) continue;
       const bob = Math.sin(t * 3 + it.id) * 3;
       ctx.save();
-      ctx.globalAlpha = 0.45 + 0.2 * Math.sin(t * 4 + it.id);
-      const g = ctx.createRadialGradient(it.cx, it.cy + bob, 2, it.cx, it.cy + bob, it.rare ? 22 : 16);
+      ctx.globalAlpha = 0.65 + 0.25 * Math.sin(t * 4 + it.id);
+      const g = ctx.createRadialGradient(it.cx, it.cy + bob, 2, it.cx, it.cy + bob, it.rare ? 26 : 20);
       g.addColorStop(0, it.role === 'pink' ? 'rgba(255,120,180,0.9)' : 'rgba(110,180,255,0.9)'); g.addColorStop(1, 'rgba(255,255,255,0)');
-      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(it.cx, it.cy + bob, it.rare ? 22 : 16, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(it.cx, it.cy + bob, it.rare ? 26 : 20, 0, Math.PI * 2); ctx.fill();
       ctx.restore();
-      Art.item(ctx, it.sub, it.cx, it.cy + bob, t, it.rare ? 26 : 21);
+      Art.item(ctx, it.sub, it.cx, it.cy + bob, t, it.rare ? 28 : 24);
     }
     for (const u of this.unicorns) Art.unicorn(ctx, u.x, u.y, u.w, t + u.x0, u.dir);
     // joueurs
     const drawP = (o, role, isMe) => {
-      Art.teddy(ctx, o.x + PW / 2, o.y + PH, role, { face: o.face, walk: o.walk, air: isMe ? !o.onGround : o.air, outfit: this.outfits[role], t, scale: 0.92, dead: o.dead });
+      Art.teddy(ctx, o.x + PW / 2, o.y + PH, role, { face: o.face, walk: o.walk, air: isMe ? !o.onGround : o.air, outfit: this.outfits[role], t, scale: 1.08, dead: o.dead });
       ctx.save(); ctx.font = 'bold 11px "Trebuchet MS", sans-serif'; ctx.textAlign = 'center';
       ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.fillStyle = COLORS[role].dark;
-      const ny = o.y - 14;
+      const ny = o.y - 20;
       ctx.strokeText(this.names[role], o.x + PW / 2, ny); ctx.fillText(this.names[role], o.x + PW / 2, ny);
       ctx.restore();
       const bb = this.bubbles[role];
-      if (bb && bb.until > t) Art.bubble(ctx, o.x + PW / 2, o.y - 22, bb.text);
+      if (bb && bb.until > t) Art.bubble(ctx, o.x + PW / 2, o.y - 30, bb.text);
     };
     drawP(this.other, this.otherRole, false);
     drawP(this.me, this.myRole, true);
