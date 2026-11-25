@@ -50,10 +50,13 @@ class Level {
       if (ch === '2') this.spawns.pink = { x: x * T + (T - PW) / 2, y: (y + 1) * T - PH };
     }
     this.levers = (d.levers || []).map((l) => ({ ...l, on: false }));
-    this.buttons = (d.buttons || []).map((b) => ({ ...b, pressed: false }));
+    this.buttons = (d.buttons || []).map((b) => ({ ...b, pressed: false, until: -1 }));
+    this.fragiles = [];
+    for (let y = 0; y < LH; y++) for (let x = 0; x < LW; x++) if (this.grid[y][x] === 'x') this.fragiles.push({ x, y, state: 'ok', timer: 0 });
+    this.fragMap = {}; for (const f of this.fragiles) this.fragMap[f.y * LW + f.x] = f;
     this.platforms = (d.platforms || []).map((p) => ({
-      x0: p.x * T, y0: p.y * T, w: p.w * T, h: p.h * T, dx: p.dx * T, dy: p.dy * T, on: p.on, vanish: !!p.vanish,
-      p: 0, x: p.x * T, y: p.y * T, prevx: p.x * T, prevy: p.y * T, color: TRIGGER_COLORS[p.on[0] % TRIGGER_COLORS.length], solid: true,
+      x0: p.x * T, y0: p.y * T, w: p.w * T, h: p.h * T, dx: p.dx * T, dy: p.dy * T, on: p.on, vanish: !!p.vanish, invert: !!p.invert,
+      p: p.invert ? 1 : 0, x: p.x * T + (p.invert ? p.dx * T : 0), y: p.y * T + (p.invert ? p.dy * T : 0), prevx: p.x * T, prevy: p.y * T, color: TRIGGER_COLORS[p.on[0] % TRIGGER_COLORS.length], solid: true,
     }));
     this.unicorns = (d.unicorns || []).map((u) => ({
       x0: u.x * T, y0: u.y * T, w: u.w * T, dx: u.dx * T, dy: u.dy * T, period: u.period,
@@ -67,12 +70,14 @@ class Level {
   }
 
   active(id) {
-    return this.buttons.some((b) => b.id === id && b.pressed) || this.levers.some((l) => l.id === id && l.on);
+    return this.buttons.some((b) => b.id === id && (b.pressed || b.until > this.t)) || this.levers.some((l) => l.id === id && l.on);
   }
 
   solidTile(tx, ty) {
     if (tx < 0 || ty < 0 || tx >= LW || ty >= LH) return true;
-    return '#fgcJ'.includes(this.grid[ty][tx]);
+    const ch = this.grid[ty][tx];
+    if (ch === 'x') return this.fragMap[ty * LW + tx].state !== 'gone';
+    return '#fgcJ'.includes(ch);
   }
 
   // Liste des rectangles solides qui touchent r
@@ -115,12 +120,21 @@ class Level {
       const br = { x: b.x * T + 3, y: b.y * T + 20, w: 26, h: 12 };
       const was = b.pressed;
       b.pressed = overlap(mr, br) || overlap(or, br);
-      if (b.pressed && !was) Sfx.play('press');
+      if (b.pressed && !was) { Sfx.play('press'); if (b.timer) b.until = this.t + b.timer; }
+      if (b.timer && b.pressed) b.until = this.t + b.timer;
+    }
+    // nuages fragiles : tremblent quand quelqu'un est dessus, disparaissent, puis reviennent
+    for (const f of this.fragiles) {
+      const fr = { x: f.x * T, y: f.y * T - 3, w: T, h: 5 };
+      const on = (r) => r.x + PW - 3 > fr.x && r.x + 3 < fr.x + T && Math.abs(r.y + PH - f.y * T) < 3;
+      if (f.state === 'ok' && (on(mr) || on(or))) { f.state = 'shake'; f.timer = 0.65; Sfx.play('crack'); }
+      else if (f.state === 'shake') { f.timer -= dt; if (f.timer <= 0) { f.state = 'gone'; f.timer = 2.6; Sfx.play('poof'); } }
+      else if (f.state === 'gone') { f.timer -= dt; if (f.timer <= 0 && !overlap(mr, { x: f.x * T, y: f.y * T, w: T, h: T }) && !overlap(or, { x: f.x * T, y: f.y * T, w: T, h: T })) f.state = 'ok'; }
     }
     // plateformes mobiles
     for (const p of this.platforms) {
       p.prevx = p.x; p.prevy = p.y;
-      const target = p.on.some((id) => this.active(id)) ? 1 : 0;
+      const target = (p.on.some((id) => this.active(id)) !== p.invert) ? 1 : 0;
       const dist = Math.max(1, Math.hypot(p.dx, p.dy) / T);
       const sp = p.vanish ? 2.5 : 2.6 / dist;
       if (p.p < target) p.p = Math.min(target, p.p + sp * dt);
@@ -150,7 +164,8 @@ class Level {
     if (input.downPressed) {
       for (const l of this.levers) {
         if (overlap(mr2, { x: l.x * T, y: l.y * T, w: T, h: T })) {
-          l.on = !l.on; Sfx.play('lever'); Net.send('lever', { id: l.id, on: l.on });
+          const nv = !l.on; for (const l2 of this.levers) if (l2.id === l.id) l2.on = nv;
+          Sfx.play('lever'); Net.send('lever', { id: l.id, on: nv });
         }
       }
     }
@@ -304,6 +319,7 @@ class Level {
     const all = res.blue.got + res.pink.got, tot = res.blue.total + res.pink.total;
     const ratio = tot ? all / tot : 1, fast = res.time <= res.par;
     res.rank = ratio === 1 && fast ? 'S' : (ratio === 1 || (fast && ratio >= 0.7)) ? 'A' : ratio >= 0.5 ? 'B' : 'C';
+    if (res.time > res.par * 1.6 && res.rank !== 'C') res.rank = 'SABC'['SABC'.indexOf(res.rank) + 1]; // beaucoup trop lent : une note de moins
     setTimeout(() => this.onEvent('complete', res), 900);
   }
 
@@ -318,7 +334,7 @@ class Level {
     switch (type) {
       case 'st': o.tx = d.x; o.ty = d.y; o.face = d.f; o.walk = d.w; o.air = d.a; if (!o.seen) { o.x = d.x; o.y = d.y; o.seen = true; } break;
       case 'collect': this.takeItem(d.id); break;
-      case 'lever': { const l = this.levers.find((x) => x.id === d.id); if (l) { l.on = d.on; Sfx.play('lever'); } break; }
+      case 'lever': { let any = false; for (const l of this.levers) if (l.id === d.id) { l.on = d.on; any = true; } if (any) Sfx.play('lever'); break; }
       case 'die': this.die(false); break;
       case 'complete': this.complete(d); break;
       case 'emote': this.emote(this.otherRole, d.i, false); break;
@@ -350,7 +366,19 @@ class Level {
     const inD = (r, role) => { const d = this.doors[role]; return overlap(r, d); };
     Art.door(ctx, this.doors.blue.x, this.doors.blue.y, 'blue', inD(this.myRole === 'blue' ? mr : or, 'blue'), t);
     Art.door(ctx, this.doors.pink.x, this.doors.pink.y, 'pink', inD(this.myRole === 'pink' ? mr : or, 'pink'), t);
-    for (const b of this.buttons) Art.button(ctx, b.x * T, b.y * T, b.pressed, TRIGGER_COLORS[b.id % TRIGGER_COLORS.length]);
+    for (const f of this.fragiles) Art.fragile(ctx, f.x * T, f.y * T, f.state, f.timer, t);
+    for (const b of this.buttons) {
+      const col = TRIGGER_COLORS[b.id % TRIGGER_COLORS.length];
+      Art.button(ctx, b.x * T, b.y * T, b.pressed, col);
+      if (b.timer) { // chrono du bouton-minuteur
+        const left = Math.max(0, b.until - this.t) / b.timer;
+        ctx.save(); ctx.lineWidth = 4; ctx.strokeStyle = '#1f141f'; ctx.beginPath(); ctx.arc(b.x * T + 16, b.y * T + 8, 9, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = '#fff'; ctx.fill();
+        if (left > 0) { ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(b.x * T + 16, b.y * T + 8); ctx.arc(b.x * T + 16, b.y * T + 8, 9, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * left); ctx.fill(); }
+        ctx.fillStyle = '#1f141f'; ctx.fillRect(b.x * T + 15, b.y * T + 2, 2, 7);
+        ctx.restore();
+      }
+    }
     for (const l of this.levers) {
       Art.lever(ctx, l.x * T, l.y * T, l.on, TRIGGER_COLORS[l.id % TRIGGER_COLORS.length]);
       if (overlap(mr, { x: l.x * T, y: l.y * T, w: T, h: T }) && !this.done) Art.bubble(ctx, l.x * T + 16, l.y * T - 14, '↓ levier');
@@ -398,7 +426,10 @@ class Level {
     ctx.fillStyle = '#8a4f9e'; ctx.textAlign = 'left';
     ctx.fillText(`Niveau ${this.def.index + 1} · ${this.def.name}`, 20, 17);
     ctx.textAlign = 'center';
-    const tt = this.t; ctx.fillText(`⏱ ${Math.floor(tt / 60)}:${String(Math.floor(tt % 60)).padStart(2, '0')}`, W / 2 + 40, 17);
+    const tt = this.t, par = this.def.par, fmt = (v) => `${Math.floor(v / 60)}:${String(Math.floor(v % 60)).padStart(2, '0')}`;
+    const over = tt > par;
+    ctx.fillStyle = over ? '#e0306c' : (par - tt < 10 ? '#d9822b' : '#8a4f9e');
+    ctx.fillText(`⏱ ${fmt(tt)} / ${fmt(par)}${over ? '  (temps dépassé)' : ''}`, W / 2 + 40, 17);
     ctx.textAlign = 'right';
     const cnt = (role) => { const n = this.items.filter((i) => i.role === role && !i.rare); return `${n.filter((i) => i.taken).length}/${n.length}`; };
     Art.item(ctx, 'gpu', W - 160, 17, this.gt, 16); ctx.fillStyle = COLORS.blue.dark; ctx.fillText(cnt('blue'), W - 112, 17);

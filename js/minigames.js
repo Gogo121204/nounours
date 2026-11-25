@@ -2,7 +2,7 @@
 const MG_INFO = [
   { id: 'duel', name: 'Duel de cowboys', rules: 'Attendez le signal « FEU ! » puis appuyez sur ESPACE (ou cliquez) le plus vite possible. Trop tôt = perdu ! Premier à 2 manches.' },
   { id: 'yams', name: 'Yams express', rules: '3 tours chacun. Jusqu\'à 3 lancers par tour, cliquez sur les dés pour les garder. Le meilleur combo compte (Yams = 50 !). Le plus gros total gagne.' },
-  { id: 'palet', name: 'Palet sur nuage', rules: '3 palets chacun. Cliquez n\'importe où, tirez vers l\'arrière comme un lance-pierre et relâchez : plus vous tirez loin, plus c\'est fort. Le palet le plus proche du cœur gagne !' },
+  { id: 'palet', name: 'Palet sur nuage', rules: '3 palets chacun. Visez avec la souris, gardez le clic enfoncé : la jauge de puissance monte et descend. Relâchez au bon moment ! Le palet le plus proche du cœur gagne.' },
   { id: 'quiestce', name: 'Qui est-ce ?', rules: 'Chacun a un personnage secret. À votre tour, posez une question (les cartes s\'éliminent toutes seules) ou tentez de deviner. Mauvaise réponse = défaite !' },
   { id: 'hockey', name: 'Air hockey', rules: 'Déplacez votre palet avec la souris (moitié du bas). Premier à 5 buts !' },
 ];
@@ -17,12 +17,32 @@ class MiniGame {
   showEnd(w) { if (this.result) return; this.result = w; Sfx.play(w === this.myRole ? 'win' : (w === 'tie' ? 'click' : 'lose')); this.onResult(w); }
   netBase(d) {
     if (d.t === 'end') { this.showEnd(d.w); return true; }
-    if (d.t === 'start') { this.started = true; this.onStart && this.onStart(d); return true; }
+    if (d.t === 'start') { this.begin(d); return true; }
     return false;
   }
-  hostStart(extra) { const d = Object.assign({ t: 'start' }, extra || {}); this.send(d); this.started = true; this.onStart && this.onStart(d); }
+  hostStart(extra) { const d = Object.assign({ t: 'start' }, extra || {}); this.send(d); this.begin(d); }
+  // décompte 3-2-1 avant de jouer (les clics pendant le décompte ne comptent pas)
+  begin(d) { this.started = true; this.countdown = 3.6; this.lastTick = 4; this.pendingStart = d; }
+  tickCountdown(dt) {
+    if (!(this.countdown > 0)) return false;
+    this.countdown -= dt;
+    const n = Math.ceil(this.countdown - 0.6);
+    if (n !== this.lastTick && n >= 0) { this.lastTick = n; Sfx.play(n === 0 ? 'go' : 'tick'); }
+    if (this.countdown <= 0) { const d = this.pendingStart; this.pendingStart = null; this.onStart && this.onStart(d); }
+    return true;
+  }
+  drawCountdown(ctx, W, H) {
+    if (!(this.countdown > 0)) return;
+    const n = Math.ceil(this.countdown - 0.6);
+    const f = (this.countdown - 0.6) % 1;
+    ctx.save(); ctx.fillStyle = 'rgba(60,30,80,0.25)'; ctx.fillRect(0, 0, W, H);
+    UI.title(ctx, n > 0 ? String(n) : 'C\'est parti !', W / 2, H / 2, (n > 0 ? 120 : 70) * (1 + Math.max(0, f) * 0.25));
+    ctx.restore();
+  }
   // écran d'intro commun
+  get ready() { return this.started && !(this.countdown > 0); }
   drawIntro(ctx, W, H) {
+    if (this.started) return;
     UI.panel(ctx, 170, 150, 620, 340);
     UI.title(ctx, this.info.name, W / 2, 200, 38);
     UI.wrap(ctx, this.info.rules, W / 2, 260, 540, 26, 18, '#7a3f8e');
@@ -135,14 +155,15 @@ function yamsScore(d) {
   if (has([1, 2, 3, 4, 5]) || has([2, 3, 4, 5, 6])) opts.push({ n: 'Grande suite', s: 40 });
   if (has([1, 2, 3, 4]) || has([2, 3, 4, 5]) || has([3, 4, 5, 6])) opts.push({ n: 'Petite suite', s: 30 });
   if (counts[0] === 3 && counts[1] === 2) opts.push({ n: 'Full', s: 25 });
-  if (counts[0] >= 4) { const v = c.findIndex((x, i) => i > 0 && x >= 4); opts.push({ n: 'Carré', s: 20 + v * 4 }); }
-  if (counts[0] >= 3) { const v = c.findIndex((x, i) => i > 0 && x >= 3); opts.push({ n: 'Brelan', s: 10 + v * 3 }); }
-  return opts.reduce((a, b) => (b.s > a.s ? b : a));
+  // Carré et brelan valent le total des dés (règle classique du Yams)
+  if (counts[0] >= 4) opts.push({ n: 'Carré', s: sum });
+  else if (counts[0] >= 3) opts.push({ n: 'Brelan', s: sum });
+  return opts.reduce((a, b) => (b.s >= a.s ? b : a));
 }
 class YamsGame extends MiniGame {
   constructor(o) { super(o); this.scores = { blue: [], pink: [] }; this.turn = 'blue'; this.turnN = 0; this.resetDice(); this.log = ''; this.anim = 0; }
   resetDice() { this.dice = [1, 2, 3, 4, 5]; this.held = [false, false, false, false, false]; this.rolls = 0; }
-  get myTurn() { return this.started && !this.result && this.turn === this.myRole; }
+  get myTurn() { return this.ready && !this.result && this.turn === this.myRole; }
   roll() { const d = this.dice.map((v, i) => (this.held[i] ? v : 1 + Math.floor(Math.random() * 6))); this.send({ t: 'roll', d }); this.applyRoll(d); }
   applyRoll(d) { this.dice = d; this.rolls++; this.anim = 0.5; Sfx.play('dice'); }
   hold(i) { if (this.rolls === 0) return; this.send({ t: 'hold', i }); this.held[i] = !this.held[i]; }
@@ -208,19 +229,19 @@ class YamsGame extends MiniGame {
 const PAL = { x: 300, y: 70, w: 360, h: 540, tx: 480, ty: 170, r: 15, start: { x: 480, y: 545 }, k: 3.2, max: 900 };
 class PaletGame extends MiniGame {
   constructor(o) { super(o); this.pucks = []; this.shot = 0; this.turn = 'blue'; this.moving = false; this.drag = null; this.waitSettle = false; this.final = null; }
-  get myTurn() { return this.started && !this.result && !this.moving && !this.waitSettle && this.turn === this.myRole && this.shot < 6; }
-  // On clique n'importe où, on tire dans le sens opposé au tir (lance-pierre) : plus on tire loin, plus c'est fort
+  get myTurn() { return this.ready && !this.result && !this.moving && !this.waitSettle && this.turn === this.myRole && this.shot < 6; }
+  // On vise avec la souris ; on garde le clic enfoncé : la jauge monte et descend ; on relâche pour tirer
+  power() { const p = (this.charge % 2.4) / 1.2; return p <= 1 ? p : 2 - p; }
   shotVec(x, y) {
-    let vx = (this.drag.x - x) * PAL.k, vy = (this.drag.y - y) * PAL.k;
-    const sp = Math.hypot(vx, vy); if (sp > PAL.max) { vx *= PAL.max / sp; vy *= PAL.max / sp; }
-    return { vx, vy, sp: Math.min(sp, PAL.max) };
+    const dx = x - PAL.start.x, dy = y - PAL.start.y, d = Math.hypot(dx, dy) || 1;
+    const sp = 80 + this.power() * (PAL.max - 80);
+    return { vx: dx / d * sp, vy: dy / d * sp, sp };
   }
-  onMouseDown(x, y) { if (this.myTurn) this.drag = { x, y }; }
+  onMouseDown(x, y) { if (this.myTurn) { this.drag = { x, y }; this.charge = 0; } }
   onMouseUp(x, y) {
     if (!this.drag) return;
-    const v = this.shotVec(x, y);
+    const v = this.shotVec(UI.mx >= 0 ? UI.mx : x, UI.my >= 0 ? UI.my : y);
     this.drag = null;
-    if (v.sp < 60) return;
     this.send({ t: 'shot', vx: v.vx, vy: v.vy }); this.applyShot(v.vx, v.vy, true);
   }
   applyShot(vx, vy, mine) {
@@ -251,6 +272,7 @@ class PaletGame extends MiniGame {
   }
   update(dt) {
     this.t += dt;
+    if (this.drag) this.charge += dt;
     if (this.moving) {
       for (let k = 0; k < 4; k++) this.step(dt / 4);
       if (this.pucks.every((p) => Math.hypot(p.vx, p.vy) < 4)) {
@@ -293,14 +315,16 @@ class PaletGame extends MiniGame {
     if (!this.started) { this.drawIntro(ctx, W, H); return; }
     if (this.shot < 6 && !this.moving && !this.waitSettle) {
       this.drawPuck(ctx, PAL.start.x, PAL.start.y, this.turn, 0.85);
-      if (this.drag && UI.mx >= 0) {
-        const v = this.shotVec(UI.mx, UI.my), pw = v.sp / PAL.max;
+      if (this.myTurn && UI.mx >= 0) {
+        const pw = this.drag ? this.power() : 0;
+        const a = Math.atan2(UI.my - PAL.start.y, UI.mx - PAL.start.x);
         ctx.save(); ctx.strokeStyle = COLORS[this.turn].dark; ctx.lineWidth = 4; ctx.setLineDash([8, 8]);
-        const L = 60 + pw * 240, a = Math.atan2(v.vy, v.vx);
+        const L = 50 + pw * 260;
         ctx.beginPath(); ctx.moveTo(PAL.start.x, PAL.start.y); ctx.lineTo(PAL.start.x + Math.cos(a) * L, PAL.start.y + Math.sin(a) * L); ctx.stroke();
-        ctx.setLineDash([]); ctx.strokeStyle = 'rgba(160,100,180,0.5)'; ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.moveTo(this.drag.x, this.drag.y); ctx.lineTo(UI.mx, UI.my); ctx.stroke();
         ctx.restore();
+      }
+      if (this.drag && UI.mx >= 0) {
+        const pw = this.power();
         // jauge de puissance
         UI.panel(ctx, 40, 200, 60, 300, 0.85);
         const gh = 260 * pw; const g = ctx.createLinearGradient(0, 480, 0, 220); g.addColorStop(0, '#8fd3ff'); g.addColorStop(0.6, '#ff9fd0'); g.addColorStop(1, '#ff4f8b');
@@ -308,7 +332,7 @@ class PaletGame extends MiniGame {
         UI.text(ctx, Math.round(pw * 100) + '%', 70, 520, 15, '#7a3f8e');
       }
     }
-    let txt = this.final ? `${this.names[this.final.w]} gagne avec ${this.final.pts} palet(s) au plus près !` : this.myTurn ? 'À toi ! Clique n\'importe où, tire vers l\'arrière et relâche' : this.moving ? 'Ça glisse…' : `Au tour de ${this.names[this.turn]}…`;
+    let txt = this.final ? `${this.names[this.final.w]} gagne avec ${this.final.pts} palet(s) au plus près !` : this.myTurn ? 'À toi ! Vise avec la souris, garde le clic enfoncé et relâche au bon moment' : this.moving ? 'Ça glisse…' : `Au tour de ${this.names[this.turn]}…`;
     UI.panel(ctx, 680, 260, 260, 120, 0.85); UI.wrap(ctx, txt, 810, 300, 230, 24, 17, '#7a3f8e');
   }
   drawPuck(ctx, x, y, role, a) {
@@ -349,7 +373,7 @@ class QuiEstCeGame extends MiniGame {
     this.chars = d.chars.map((c) => Object.assign({}, c));
     this.secret = d.secret; this.elim = new Array(16).fill(false);
   }
-  get myTurn() { return this.started && !this.result && this.turn === this.myRole; }
+  get myTurn() { return this.ready && !this.result && this.turn === this.myRole; }
   ask(qi) {
     const target = this.chars[this.secret[this.otherRole]];
     const ans = QE_QUESTIONS[qi][1](target);
@@ -399,7 +423,7 @@ class QuiEstCeGame extends MiniGame {
   }
   draw(ctx, W, H) {
     this.bg(ctx, W, H);
-    if (!this.started) { this.scoreBar(ctx, W, '', '', ''); this.drawIntro(ctx, W, H); return; }
+    if (!this.started || !this.chars.length) { this.scoreBar(ctx, W, '', '', ''); this.drawIntro(ctx, W, H); return; }
     // plateau
     const cw = 118, chh = 134, x0 = 24, y0 = 24;
     this.chars.forEach((c, i) => {

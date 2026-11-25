@@ -590,6 +590,23 @@ Art.platform = function (ctx, x, y, w, h, col) {
   ctx.restore();
 };
 
+// Nuage fragile (tremble, disparaît, revient)
+Art.fragile = function (ctx, px, py, state, timer, t) {
+  ctx.save();
+  let dx = 0, a = 1;
+  if (state === 'shake') dx = Math.sin(t * 60) * 2;
+  if (state === 'gone') a = timer < 0.6 ? 0.35 : 0.12;
+  ctx.globalAlpha = a; ctx.translate(px + dx, py);
+  ctx.fillStyle = state === 'shake' ? '#ffe0ee' : '#ffffff'; ctx.strokeStyle = OUT; ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(3, 24); ctx.arc(8, 16, 7, Math.PI * 0.6, Math.PI * 1.45); ctx.arc(16, 9, 8, Math.PI * 1.15, Math.PI * 1.85); ctx.arc(24, 16, 7, Math.PI * 1.55, Math.PI * 0.4);
+  ctx.closePath(); ctx.fill();
+  if (state === 'gone') ctx.setLineDash([4, 4]);
+  ctx.stroke();
+  if (state !== 'gone') { ctx.strokeStyle = 'rgba(200,120,170,0.7)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(12, 14); ctx.lineTo(15, 18); ctx.lineTo(13, 22); ctx.stroke(); }
+  ctx.restore();
+};
+
 // Bulle d'émote
 Art.bubble = function (ctx, x, y, text) {
   ctx.save();

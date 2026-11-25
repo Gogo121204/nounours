@@ -90,9 +90,12 @@ const Sfx = (() => {
         case 'buy': chime([784, 1047, 1319, 1568], 0.06, 0.15); break;
         case 'click': tone(700, 0.05, 'sine', 0.12); break;
         case 'emote': tone(880, 0.08, 'sine', 0.1, 1200); break;
+        case 'crack': noise(0.12, 0.12, 1800); tone(300, 0.1, 'square', 0.04, 200); break;
+        case 'poof': noise(0.3, 0.12, 600); break;
         case 'whoosh': noise(0.55, 0.12, 300); break;
         case 'bang': noise(0.3, 0.35, 200); tone(120, 0.25, 'sawtooth', 0.15, 40); break;
-        case 'tick': tone(1000, 0.04, 'sine', 0.1); break;
+        case 'tick': tone(880, 0.12, 'triangle', 0.16); break;
+        case 'go': [784, 1047, 1319].forEach((f, i) => tone(f, 0.25, 'triangle', 0.17, null, i * 0.06)); break;
         case 'dice': for (let i = 0; i < 6; i++) { noise(0.03, 0.08, 1500, i * 0.05); tone(300 + Math.random() * 400, 0.03, 'square', 0.04, null, i * 0.05); } break;
         case 'hit': tone(420, 0.06, 'square', 0.08); noise(0.04, 0.06, 2000); break;
         case 'goal': [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.25, 'square', 0.07, null, i * 0.07)); break;

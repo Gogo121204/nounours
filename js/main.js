@@ -25,6 +25,7 @@ let save = (() => {
   return { name: '', wallet: 0, owned: [], outfit: {}, collection: {}, host: { unlocked: 1, best: {}, rivalry: { blue: 0, pink: 0 }, mgDone: {} } };
 })();
 save.host = save.host || { unlocked: 1, best: {}, rivalry: { blue: 0, pink: 0 }, mgDone: {} };
+if (save.host.best && save.host.best[9] && save.host.unlocked < 11) save.host.unlocked = 11; // chapitre 2 débloqué si le niveau 10 est fini
 function persist() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) {} }
 
 // ---------- état ----------
@@ -147,8 +148,8 @@ function startTransition(title, sub, kind) {
 
 function applyGo(screen, idx) {
   G.screen = screen; G.mg = null; G.mgResult = null; G.result = null;
-  if (screen === 'level') { Sfx.setTrack('calm'); startTransition(`Niveau ${idx + 1}`, LEVELS[idx].name, 'level'); }
-  else if (screen === 'minigame') { Sfx.setTrack('mini'); startTransition('Mini-jeu duel !', MG_INFO[idx].name, 'mg'); }
+  if (screen === 'level') { Sfx.setTrack('calm'); startTransition(idx === 10 ? 'Chapitre 2 · Niveau 11' : `Niveau ${idx + 1}`, LEVELS[idx].name, 'level'); G.mapPage = idx >= 10 ? 1 : 0; }
+  else if (screen === 'minigame') { Sfx.setTrack('mini'); startTransition('Mini-jeu duel !', MG_INFO[idx % 5].name, 'mg'); }
   else if (screen === 'final') { Sfx.setTrack('final'); startTransition('Le grand final', 'Bravo les nounours !', 'final'); }
   else { Sfx.setTrack('calm'); if (screen === 'map') startTransition('', '', 'quick'); }
   if (screen === 'level') {
@@ -157,7 +158,7 @@ function applyGo(screen, idx) {
   } else G.level = screen === 'result' ? G.level : null;
   if (screen === 'minigame') {
     G.mgIdx = idx;
-    G.mg = new MG_CLASSES[idx]({ index: idx, myRole: G.myRole, otherRole: G.otherRole, names: G.names, outfits: G.outfits, onResult: onMgResult });
+    G.mg = new MG_CLASSES[idx % 5]({ index: idx % 5, myRole: G.myRole, otherRole: G.otherRole, names: G.names, outfits: G.outfits, onResult: onMgResult });
   }
   if (screen === 'final') { G.finalT = 0; Sfx.play('win'); }
 }
@@ -168,14 +169,15 @@ function onLevelEvent(type, res) {
   Sfx.play('fanfare'); setTimeout(() => Sfx.play('rank'), 900);
   // gains personnels
   const mine = res[G.myRole];
-  G.gains = mine.got + (mine.rare ? 10 : 0);
+  G.timeBonus = res.time <= res.par ? 3 : 0;
+  G.gains = mine.got + (mine.rare ? 10 : 0) + G.timeBonus;
   save.wallet += G.gains;
   for (const s of mine.subs) save.collection[s] = (save.collection[s] || 0) + 1;
   if (mine.rare) save.collection[mine.rareSub] = (save.collection[mine.rareSub] || 0) + 1;
   persist();
   if (Net.isHost) {
     const h = G.host, i = G.levelIdx;
-    h.unlocked = Math.max(h.unlocked, Math.min(10, i + 2));
+    h.unlocked = Math.max(h.unlocked, Math.min(LEVELS.length, i + 2));
     const order = 'CBAS';
     if (!h.best[i] || order.indexOf(res.rank) > order.indexOf(h.best[i])) h.best[i] = res.rank;
     persistHost();
@@ -191,10 +193,10 @@ function onMgResult(w) {
 function afterLevel() {
   const i = G.levelIdx;
   if ((i + 1) % 2 === 0) go('minigame', (i + 1) / 2 - 1);
-  else go('level', Math.min(9, i + 1));
+  else go('level', Math.min(LEVELS.length - 1, i + 1));
 }
 function afterMg() {
-  if (G.mgIdx >= 4) go('final');
+  if (G.mgIdx >= 9) go('final');
   else go('level', (G.mgIdx + 1) * 2);
 }
 
@@ -202,40 +204,38 @@ function afterMg() {
 const MAP_NODES = [[110, 520], [230, 430], [130, 320], [270, 230], [420, 300], [540, 420], [680, 470], [800, 370], [700, 250], [830, 140]];
 
 function drawMap() {
-  Art.background(ctx, W, H, G.t, 1);
-  UI.title(ctx, 'Nounours & Licornes', W / 2, 46, 44);
-  // chemin
-  ctx.save(); ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 10; ctx.setLineDash([2, 16]); ctx.lineCap = 'round';
+  const page = G.mapPage || 0, off = page * 10;
+  Art.background(ctx, W, H, G.t, 1 + page);
+  UI.title(ctx, page ? 'Chapitre 2 · Niveaux 11 à 20' : 'Nounours & Licornes', W / 2, 46, page ? 36 : 44);
+  ctx.save(); ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 10; ctx.setLineDash([2, 16]); ctx.lineCap = 'round';
   ctx.beginPath(); MAP_NODES.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.stroke(); ctx.restore();
   const h = G.host;
-  // mini-jeux entre les niveaux
   for (let m = 0; m < 5; m++) {
+    const slot = m + page * 5;
     const a = MAP_NODES[m * 2 + 1], b = MAP_NODES[Math.min(9, m * 2 + 2)];
     const x = m === 4 ? a[0] + 70 : (a[0] + b[0]) / 2 + 30, y = m === 4 ? a[1] + 70 : (a[1] + b[1]) / 2;
-    const open = !!h.best[m * 2 + 1];
+    const open = !!h.best[off + m * 2 + 1];
     ctx.save(); ctx.globalAlpha = open ? 1 : 0.7;
     Art.sparkle(ctx, x, y, 20 + Math.sin(G.t * 3 + m) * 2, open ? '#ffd34d' : '#ccc');
     UI.text(ctx, MG_INFO[m].name, x, y + 30, 13, '#8a4f9e');
-    if (h.mgDone && h.mgDone[m]) UI.text(ctx, '✓', x, y + 1, 14, '#fff');
+    if (h.mgDone && h.mgDone[slot]) UI.text(ctx, '✓', x, y + 1, 14, '#fff');
     ctx.restore();
-    if (open && Net.isHost) UI.hits.push({ x: x - 24, y: y - 24, w: 48, h: 48, cb: () => go('minigame', m) });
+    if (open && Net.isHost) UI.hits.push({ x: x - 24, y: y - 24, w: 48, h: 48, cb: () => go('minigame', slot) });
   }
-  MAP_NODES.forEach(([x, y], i) => {
+  MAP_NODES.forEach(([x, y], k) => {
+    const i = k + off;
     const open = i < h.unlocked;
-    ctx.save();
-    ctx.shadowColor = 'rgba(150,80,160,0.35)'; ctx.shadowBlur = 12;
-    Art.cloud(ctx, x - 26, y + 4, 0.8, open ? 1 : 0.55);
-    ctx.restore();
+    ctx.save(); ctx.shadowColor = 'rgba(150,80,160,0.35)'; ctx.shadowBlur = 12;
+    Art.cloud(ctx, x - 26, y + 4, 0.8, open ? 1 : 0.55); ctx.restore();
     ctx.beginPath(); ctx.arc(x, y, 22, 0, Math.PI * 2);
-    ctx.fillStyle = open ? (i % 2 ? '#ff9fd0' : '#8fd3ff') : '#d9d2e3'; ctx.fill(); ctx.lineWidth = 3; ctx.strokeStyle = '#fff'; ctx.stroke();
-    UI.text(ctx, open ? String(i + 1) : '🔒', x, y + 1, open ? 20 : 16, '#fff');
+    ctx.fillStyle = open ? (i % 2 ? '#ff9fd0' : '#8fd3ff') : '#d9d2e3'; ctx.fill(); ctx.lineWidth = 3; ctx.strokeStyle = '#1f141f'; ctx.stroke();
+    UI.text(ctx, open ? String(i + 1) : '🔒', x, y + 1, open ? 18 : 16, open ? '#5a2a6a' : '#888');
     if (h.best[i]) UI.text(ctx, h.best[i], x + 24, y - 20, 16, h.best[i] === 'S' ? '#ff4f8b' : '#8a4f9e');
     if (open && Net.isHost) UI.hits.push({ x: x - 26, y: y - 26, w: 52, h: 52, cb: () => go('level', i) });
-    if (open && Math.hypot(UI.mx - x, UI.my - y) < 26) { UI.panel(ctx, x - 110, y - 74, 220, 40, 0.95); UI.text(ctx, LEVELS[i].name, x, y - 54, 14, '#7a3f8e'); }
+    if (open && Math.hypot(UI.mx - x, UI.my - y) < 26) { UI.panel(ctx, x - 120, y - 74, 240, 40, 0.95); UI.text(ctx, LEVELS[i].name, x, y - 54, 14, '#7a3f8e'); }
   });
-  // licorne qui vole sur la carte
   Art.unicorn(ctx, 420 + Math.sin(G.t * 0.6) * 60, 120 + Math.sin(G.t * 1.2) * 12, 90, G.t, Math.cos(G.t * 0.6) > 0 ? 1 : -1);
-  // joueurs + rivalité
+  UI.btn(ctx, 20, 70, 130, 38, page ? '◀ Chapitre 1' : 'Chapitre 2 ▶', () => { G.mapPage = page ? 0 : 1; }, { size: 14, color: '#b9a0f5' });
   UI.panel(ctx, 20, 560, 300, 70, 0.9);
   Art.teddy(ctx, 50, 620, 'blue', { scale: 1.3, outfit: G.outfits.blue, t: G.t });
   Art.teddy(ctx, 290, 620, 'pink', { scale: 1.3, outfit: G.outfits.pink, t: G.t, face: -1 });
@@ -252,7 +252,7 @@ function drawResult() {
   ctx.fillStyle = 'rgba(255,230,245,0.55)'; ctx.fillRect(0, 0, W, H);
   UI.panel(ctx, 180, 80, 600, 480);
   UI.title(ctx, 'Niveau réussi !', W / 2, 130, 40);
-  UI.text(ctx, `Temps : ${Math.floor(r.time / 60)}:${String(Math.floor(r.time % 60)).padStart(2, '0')}  (objectif ${r.par}s)`, W / 2, 180, 18, '#7a3f8e');
+  UI.text(ctx, `Temps : ${Math.floor(r.time / 60)}:${String(Math.floor(r.time % 60)).padStart(2, '0')}  (objectif ${r.par}s)` + (r.time <= r.par ? '  ✓ bonus temps +3' : '  ✗ trop lent, pas de bonus'), W / 2, 180, 18, r.time <= r.par ? '#3f8f5a' : '#c0408a');
   ctx.save(); ctx.font = 'bold 90px "Fredoka","Trebuchet MS",sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.lineWidth = 8; ctx.strokeStyle = '#fff'; ctx.strokeText(r.rank, W / 2, 255);
   ctx.fillStyle = { S: '#ff4f8b', A: '#b07cf0', B: '#5aa8f0', C: '#9a8fa8' }[r.rank]; ctx.fillText(r.rank, W / 2, 255); ctx.restore();
@@ -268,7 +268,7 @@ function drawResult() {
   if (G.resT > 1.2 && G.coinShown < G.gains && Math.floor(G.resT * 12) !== G.lastCoinTick) { G.lastCoinTick = Math.floor(G.resT * 12); G.coinShown++; Sfx.play('coin'); }
   UI.text(ctx, `+${G.coinShown} pour ta boutique 🛍️`, W / 2, 330, 16, '#a070b0');
   if (Net.isHost) {
-    const next = (G.levelIdx + 1) % 2 === 0 ? `Mini-jeu : ${MG_INFO[(G.levelIdx + 1) / 2 - 1].name}` : 'Niveau suivant';
+    const next = (G.levelIdx + 1) % 2 === 0 ? `Mini-jeu : ${MG_INFO[((G.levelIdx + 1) / 2 - 1) % 5].name}` : 'Niveau suivant';
     UI.btn(ctx, W / 2 + 10, 500, 250, 46, next + ' ➜', afterLevel, { size: 15 });
     UI.btn(ctx, W / 2 - 260, 500, 120, 46, 'Rejouer', () => go('level', G.levelIdx), { size: 15, color: '#b9a0f5' });
     UI.btn(ctx, W / 2 - 130, 500, 120, 46, 'Carte', () => go('map'), { size: 15, color: '#b9a0f5' });
@@ -287,7 +287,7 @@ function drawMgOverlay() {
     UI.text(ctx, w === G.myRole ? '+5 pour ta boutique 🛍️' : 'La revanche au prochain mini-jeu 😈', W / 2, 390, 16, '#a070b0');
   }
   if (Net.isHost) {
-    UI.btn(ctx, W / 2 - 10, 410, 220, 46, G.mgIdx >= 4 ? 'Le grand final ➜' : 'Niveau suivant ➜', afterMg, { size: 15 });
+    UI.btn(ctx, W / 2 - 10, 410, 220, 46, G.mgIdx >= 9 ? 'Le grand final ➜' : G.mgIdx === 4 ? 'Chapitre 2 ➜' : 'Niveau suivant ➜', afterMg, { size: 15 });
     UI.btn(ctx, W / 2 - 210, 410, 180, 46, 'Revanche', () => go('minigame', G.mgIdx), { size: 15, color: '#b9a0f5' });
   } else UI.text(ctx, `${G.names[G.otherRole]} choisit la suite…`, W / 2, 432, 16, '#a070b0');
 }
@@ -371,8 +371,10 @@ function frame(now) {
     case 'result': if (G.level) G.level.update(dt, {}); drawResult(); break;
     case 'minigame':
       if (G.mg) {
-        if (!G.mgResult && (!G.trans || G.trans.t > 1.1)) G.mg.update(dt, input); else G.mg.t += dt;
+        const cd = G.mg.tickCountdown(dt);
+        if (!G.mgResult && !cd && (!G.trans || G.trans.t > 1.1)) G.mg.update(dt, input); else G.mg.t += dt;
         G.mg.draw(ctx, W, H);
+        G.mg.drawCountdown(ctx, W, H);
         if (input.emote != null) { G.mgBubble = { role: G.myRole, text: EMOTES[input.emote], until: G.t + 2.5 }; Net.send('mgemote', { i: input.emote }); Sfx.play('emote'); }
         if (G.mgBubble && G.mgBubble.until > G.t) Art.bubble(ctx, G.mgBubble.role === 'blue' ? 140 : W - 140, 110, G.mgBubble.text);
         if (G.mgResult) drawMgOverlay();
