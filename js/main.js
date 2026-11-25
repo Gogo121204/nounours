@@ -25,7 +25,8 @@ let save = (() => {
   return { name: '', wallet: 0, owned: [], outfit: {}, collection: {}, host: { unlocked: 1, best: {}, rivalry: { blue: 0, pink: 0 }, mgDone: {} } };
 })();
 save.host = save.host || { unlocked: 1, best: {}, rivalry: { blue: 0, pink: 0 }, mgDone: {} };
-if (save.host.best && save.host.best[9] && save.host.unlocked < 11) save.host.unlocked = 11; // chapitre 2 débloqué si le niveau 10 est fini
+if (save.host.best && save.host.best[9] && save.host.unlocked < 11) save.host.unlocked = 11;
+if (save.host.best && save.host.best[19] && save.host.unlocked < 21) save.host.unlocked = 21; // chapitre 2 débloqué si le niveau 10 est fini
 function persist() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) {} }
 
 // ---------- état ----------
@@ -148,17 +149,17 @@ function startTransition(title, sub, kind) {
 
 function applyGo(screen, idx) {
   G.screen = screen; G.mg = null; G.mgResult = null; G.result = null;
-  if (screen === 'level') { Sfx.setTrack('calm'); startTransition(idx === 10 ? 'Chapitre 2 · Niveau 11' : `Niveau ${idx + 1}`, LEVELS[idx].name, 'level'); G.mapPage = idx >= 10 ? 1 : 0; }
-  else if (screen === 'minigame') { Sfx.setTrack('mini'); startTransition('Mini-jeu duel !', MG_INFO[idx % 5].name, 'mg'); }
+  if (screen === 'level') { Sfx.setTrack('calm'); startTransition(`Niveau ${idx + 1}`, LEVELS[idx].name, 'level'); G.focusLevel = idx; }
+  else if (screen === 'minigame') { Sfx.setTrack('mini'); startTransition('Mini-jeu duel !', MG_INFO[idx % MG_CLASSES.length].name, 'mg'); }
   else if (screen === 'final') { Sfx.setTrack('final'); startTransition('Le grand final', 'Bravo les nounours !', 'final'); }
-  else { Sfx.setTrack('calm'); if (screen === 'map') startTransition('', '', 'quick'); }
+  else { Sfx.setTrack('calm'); if (screen === 'map') { startTransition('', '', 'quick'); G.mapScroll = null; } }
   if (screen === 'level') {
     G.levelIdx = idx;
     G.level = new Level(LEVELS[idx], { myRole: G.myRole, names: G.names, outfits: G.outfits, onEvent: onLevelEvent });
   } else G.level = screen === 'result' ? G.level : null;
   if (screen === 'minigame') {
     G.mgIdx = idx;
-    G.mg = new MG_CLASSES[idx % 5]({ index: idx % 5, myRole: G.myRole, otherRole: G.otherRole, names: G.names, outfits: G.outfits, onResult: onMgResult });
+    G.mg = new MG_CLASSES[idx % MG_CLASSES.length]({ index: idx % MG_CLASSES.length, myRole: G.myRole, otherRole: G.otherRole, names: G.names, outfits: G.outfits, onResult: onMgResult });
   }
   if (screen === 'final') { G.finalT = 0; Sfx.play('win'); }
 }
@@ -170,7 +171,8 @@ function onLevelEvent(type, res) {
   // gains personnels
   const mine = res[G.myRole];
   G.timeBonus = res.time <= res.par ? 3 : 0;
-  G.gains = mine.got + (mine.rare ? 10 : 0) + G.timeBonus;
+  G.gains = mine.got + (mine.rare ? 10 : 0) + G.timeBonus + (res.stars ? res.stars.got * 5 : 0);
+  if (res.stars) save.collection.star = (save.collection.star || 0) + res.stars.got;
   save.wallet += G.gains;
   for (const s of mine.subs) save.collection[s] = (save.collection[s] || 0) + 1;
   if (mine.rare) save.collection[mine.rareSub] = (save.collection[mine.rareSub] || 0) + 1;
@@ -196,34 +198,49 @@ function afterLevel() {
   else go('level', Math.min(LEVELS.length - 1, i + 1));
 }
 function afterMg() {
-  if (G.mgIdx >= 9) go('final');
+  if (G.mgIdx >= LEVELS.length / 2 - 1) go('final');
   else go('level', (G.mgIdx + 1) * 2);
 }
 
 // ---------- écrans ----------
-const MAP_NODES = [[110, 520], [230, 430], [130, 320], [270, 230], [420, 300], [540, 420], [680, 470], [800, 370], [700, 250], [830, 140]];
+// Carte unique qui défile : le niveau 1 en bas, on grimpe vers le haut
+const MAP_ROW = 150, MAP_PER_ROW = 5;
+function mapContentH() { return Math.ceil(LEVELS.length / MAP_PER_ROW) * MAP_ROW + 260; }
+function mapNode(i) {
+  const row = Math.floor(i / MAP_PER_ROW); let col = i % MAP_PER_ROW; if (row % 2) col = MAP_PER_ROW - 1 - col;
+  return [150 + col * 165, mapContentH() - 150 - row * MAP_ROW];
+}
+function mapMaxScroll() { return Math.max(0, mapContentH() - H); }
+function mapFocus(i) { const [, y] = mapNode(i); G.mapScroll = Math.max(0, Math.min(mapMaxScroll(), y - H / 2)); }
+canvas.addEventListener('wheel', (e) => { if (G.screen === 'map') { e.preventDefault(); G.mapScroll = Math.max(0, Math.min(mapMaxScroll(), (G.mapScroll || 0) + e.deltaY * 0.6)); } }, { passive: false });
 
 function drawMap() {
-  const page = G.mapPage || 0, off = page * 10;
-  Art.background(ctx, W, H, G.t, 1 + page);
-  UI.title(ctx, page ? 'Chapitre 2 · Niveaux 11 à 20' : 'Nounours & Licornes', W / 2, 46, page ? 36 : 44);
-  ctx.save(); ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 10; ctx.setLineDash([2, 16]); ctx.lineCap = 'round';
-  ctx.beginPath(); MAP_NODES.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.stroke(); ctx.restore();
+  if (G.mapScroll == null) mapFocus(Math.max(0, (G.focusLevel != null ? G.focusLevel : G.host.unlocked - 1)));
+  if (keys.has('ArrowUp') || keys.has('KeyW')) G.mapScroll = Math.max(0, G.mapScroll - 8);
+  if (keys.has('ArrowDown') || keys.has('KeyS')) G.mapScroll = Math.min(mapMaxScroll(), G.mapScroll + 8);
+  const sc = G.mapScroll;
+  Art.background(ctx, W, H, G.t, 1);
+  ctx.save(); ctx.translate(0, -sc);
+  // chemin
+  ctx.save(); ctx.strokeStyle = 'rgba(255,255,255,0.95)'; ctx.lineWidth = 10; ctx.setLineDash([2, 16]); ctx.lineCap = 'round';
+  ctx.beginPath(); for (let i = 0; i < LEVELS.length; i++) { const [x, y] = mapNode(i); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); } ctx.stroke(); ctx.restore();
   const h = G.host;
-  for (let m = 0; m < 5; m++) {
-    const slot = m + page * 5;
-    const a = MAP_NODES[m * 2 + 1], b = MAP_NODES[Math.min(9, m * 2 + 2)];
-    const x = m === 4 ? a[0] + 70 : (a[0] + b[0]) / 2 + 30, y = m === 4 ? a[1] + 70 : (a[1] + b[1]) / 2;
-    const open = !!h.best[off + m * 2 + 1];
+  // étoiles des mini-jeux (après chaque niveau pair)
+  for (let m = 0; m < LEVELS.length / 2; m++) {
+    const [ax, ay] = mapNode(m * 2 + 1), [bx, by] = mapNode(Math.min(LEVELS.length - 1, m * 2 + 2));
+    const last = m * 2 + 2 >= LEVELS.length;
+    const x = last ? ax : (ax + bx) / 2, y = last ? ay - 75 : (ay + by) / 2 - (ay === by ? 42 : 0);
+    const open = !!h.best[m * 2 + 1];
     ctx.save(); ctx.globalAlpha = open ? 1 : 0.7;
-    Art.sparkle(ctx, x, y, 20 + Math.sin(G.t * 3 + m) * 2, open ? '#ffd34d' : '#ccc');
-    UI.text(ctx, MG_INFO[m].name, x, y + 30, 13, '#8a4f9e');
-    if (h.mgDone && h.mgDone[slot]) UI.text(ctx, '✓', x, y + 1, 14, '#fff');
+    Art.sparkle(ctx, x, y, 18 + Math.sin(G.t * 3 + m) * 2, open ? '#ffd34d' : '#ccc');
+    UI.text(ctx, MG_INFO[m % MG_CLASSES.length].name, x, y + 26, 12, '#8a4f9e');
+    if (h.mgDone && h.mgDone[m]) UI.text(ctx, '✓', x, y + 1, 13, '#fff');
     ctx.restore();
-    if (open && Net.isHost) UI.hits.push({ x: x - 24, y: y - 24, w: 48, h: 48, cb: () => go('minigame', slot) });
+    if (open && Net.isHost) UI.hits.push({ x: x - 22, y: y - 22 - sc, w: 44, h: 44, cb: () => go('minigame', m) });
   }
-  MAP_NODES.forEach(([x, y], k) => {
-    const i = k + off;
+  for (let i = 0; i < LEVELS.length; i++) {
+    const [x, y] = mapNode(i);
+    if (y - sc < -60 || y - sc > H + 60) continue;
     const open = i < h.unlocked;
     ctx.save(); ctx.shadowColor = 'rgba(150,80,160,0.35)'; ctx.shadowBlur = 12;
     Art.cloud(ctx, x - 26, y + 4, 0.8, open ? 1 : 0.55); ctx.restore();
@@ -231,11 +248,17 @@ function drawMap() {
     ctx.fillStyle = open ? (i % 2 ? '#ff9fd0' : '#8fd3ff') : '#d9d2e3'; ctx.fill(); ctx.lineWidth = 3; ctx.strokeStyle = '#1f141f'; ctx.stroke();
     UI.text(ctx, open ? String(i + 1) : '🔒', x, y + 1, open ? 18 : 16, open ? '#5a2a6a' : '#888');
     if (h.best[i]) UI.text(ctx, h.best[i], x + 24, y - 20, 16, h.best[i] === 'S' ? '#ff4f8b' : '#8a4f9e');
-    if (open && Net.isHost) UI.hits.push({ x: x - 26, y: y - 26, w: 52, h: 52, cb: () => go('level', i) });
-    if (open && Math.hypot(UI.mx - x, UI.my - y) < 26) { UI.panel(ctx, x - 120, y - 74, 240, 40, 0.95); UI.text(ctx, LEVELS[i].name, x, y - 54, 14, '#7a3f8e'); }
-  });
-  Art.unicorn(ctx, 420 + Math.sin(G.t * 0.6) * 60, 120 + Math.sin(G.t * 1.2) * 12, 90, G.t, Math.cos(G.t * 0.6) > 0 ? 1 : -1);
-  UI.btn(ctx, 20, 70, 130, 38, page ? '◀ Chapitre 1' : 'Chapitre 2 ▶', () => { G.mapPage = page ? 0 : 1; }, { size: 14, color: '#b9a0f5' });
+    if (open && Net.isHost) UI.hits.push({ x: x - 26, y: y - 26 - sc, w: 52, h: 52, cb: () => go('level', i) });
+    if (open && Math.hypot(UI.mx - x, UI.my + sc - y) < 26) { UI.panel(ctx, x - 125, y - 74, 250, 40, 0.95); UI.text(ctx, `${LEVELS[i].name}`, x, y - 54, 14, '#7a3f8e'); }
+  }
+  ctx.restore();
+  // barre de défilement
+  const mh = mapMaxScroll();
+  if (mh > 0) { ctx.fillStyle = 'rgba(255,255,255,0.5)'; Art.roundRect(ctx, W - 14, 80, 6, 460, 3); ctx.fill(); ctx.fillStyle = '#ff8fc6'; Art.roundRect(ctx, W - 15, 80 + (sc / mh) * 400, 8, 60, 4); ctx.fill(); }
+  // bandeau fixe
+  ctx.fillStyle = 'rgba(255,255,255,0.0)';
+  UI.title(ctx, 'Univers 1 · Le pays des nuages câlins', W / 2, 40, 34);
+  UI.text(ctx, 'Molette ou ↑ ↓ pour faire défiler', W / 2, 72, 13, '#8a4f9e');
   UI.panel(ctx, 20, 560, 300, 70, 0.9);
   Art.teddy(ctx, 50, 620, 'blue', { scale: 1.3, outfit: G.outfits.blue, t: G.t });
   Art.teddy(ctx, 290, 620, 'pink', { scale: 1.3, outfit: G.outfits.pink, t: G.t, face: -1 });
@@ -243,7 +266,7 @@ function drawMap() {
   UI.text(ctx, `${G.names.blue}  ${G.host.rivalry.blue} – ${G.host.rivalry.pink}  ${G.names.pink}`, 170, 604, 15, '#7a3f8e');
   UI.btn(ctx, W - 210, 572, 190, 50, '🛍️ Boutique', () => { G.screen = 'shop'; });
   UI.btn(ctx, W - 330, 580, 110, 36, Sfx.musicOn ? '🎵 On' : '🎵 Off', () => { Sfx.toggleMusic(); }, { size: 14, color: '#b9a0f5' });
-  UI.text(ctx, Net.isHost ? 'Clique sur un niveau ou une étoile ⭐' : `C'est ${G.names[G.otherRole]} qui choisit le niveau 💕`, W / 2 + 40, 600, 15, '#8a4f9e');
+  UI.text(ctx, Net.isHost ? 'Clique sur un niveau ou une étoile ⭐' : `C'est ${G.names[G.otherRole]} qui choisit 💕`, W / 2 + 40, 600, 14, '#8a4f9e');
 }
 
 function drawResult() {
@@ -268,7 +291,7 @@ function drawResult() {
   if (G.resT > 1.2 && G.coinShown < G.gains && Math.floor(G.resT * 12) !== G.lastCoinTick) { G.lastCoinTick = Math.floor(G.resT * 12); G.coinShown++; Sfx.play('coin'); }
   UI.text(ctx, `+${G.coinShown} pour ta boutique 🛍️`, W / 2, 330, 16, '#a070b0');
   if (Net.isHost) {
-    const next = (G.levelIdx + 1) % 2 === 0 ? `Mini-jeu : ${MG_INFO[((G.levelIdx + 1) / 2 - 1) % 5].name}` : 'Niveau suivant';
+    const next = (G.levelIdx + 1) % 2 === 0 ? `Mini-jeu : ${MG_INFO[((G.levelIdx + 1) / 2 - 1) % MG_CLASSES.length].name}` : 'Niveau suivant';
     UI.btn(ctx, W / 2 + 10, 500, 250, 46, next + ' ➜', afterLevel, { size: 15 });
     UI.btn(ctx, W / 2 - 260, 500, 120, 46, 'Rejouer', () => go('level', G.levelIdx), { size: 15, color: '#b9a0f5' });
     UI.btn(ctx, W / 2 - 130, 500, 120, 46, 'Carte', () => go('map'), { size: 15, color: '#b9a0f5' });
@@ -287,7 +310,7 @@ function drawMgOverlay() {
     UI.text(ctx, w === G.myRole ? '+5 pour ta boutique 🛍️' : 'La revanche au prochain mini-jeu 😈', W / 2, 390, 16, '#a070b0');
   }
   if (Net.isHost) {
-    UI.btn(ctx, W / 2 - 10, 410, 220, 46, G.mgIdx >= 9 ? 'Le grand final ➜' : G.mgIdx === 4 ? 'Chapitre 2 ➜' : 'Niveau suivant ➜', afterMg, { size: 15 });
+    UI.btn(ctx, W / 2 - 10, 410, 220, 46, G.mgIdx >= LEVELS.length / 2 - 1 ? 'Le grand final ➜' : 'Niveau suivant ➜', afterMg, { size: 15 });
     UI.btn(ctx, W / 2 - 210, 410, 180, 46, 'Revanche', () => go('minigame', G.mgIdx), { size: 15, color: '#b9a0f5' });
   } else UI.text(ctx, `${G.names[G.otherRole]} choisit la suite…`, W / 2, 432, 16, '#a070b0');
 }
@@ -354,7 +377,7 @@ function frame(now) {
   UI.begin();
   const emoteKey = [...pressed].find((k) => /^(Digit|Numpad)[1-7]$/.test(k));
   const input = {
-    left: has('left'), right: has('right'), jump: has('up'), jumpPressed: hit('up'), downPressed: hit('down'),
+    left: has('left'), right: has('right'), jump: has('up'), jumpPressed: hit('up'), downPressed: hit('down'), leftPressed: hit('left'), rightPressed: hit('right'),
     emote: emoteKey ? parseInt(emoteKey.slice(-1), 10) - 1 : null,
     actionPressed: pressed.has('Space') || pressed.has('Enter') || mouseClicked,
   };

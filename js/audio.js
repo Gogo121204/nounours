@@ -92,6 +92,7 @@ const Sfx = (() => {
         case 'emote': tone(880, 0.08, 'sine', 0.1, 1200); break;
         case 'crack': noise(0.12, 0.12, 1800); tone(300, 0.1, 'square', 0.04, 200); break;
         case 'poof': noise(0.3, 0.12, 600); break;
+        case 'secret': chime([523, 659, 784, 1047, 1319, 1568], 0.07, 0.14, 'triangle'); break;
         case 'whoosh': noise(0.55, 0.12, 300); break;
         case 'bang': noise(0.3, 0.35, 200); tone(120, 0.25, 'sawtooth', 0.15, 40); break;
         case 'tick': tone(880, 0.12, 'triangle', 0.16); break;

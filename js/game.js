@@ -1,8 +1,10 @@
 // Moteur de plateforme coopératif
-const T = 32, PW = 22, PH = 30;
+const T = 32, PW = 20, PH = 26;
 const SPEED = 210, ACC = 1500, DEC = 1900, AIR_ACC = 1050, AIR_DEC = 350, JUMP = 545, HOLD_TIME = 0.16, HOLD_GRAV = 0.5, CUT_VY = 240, GRAV = 1800, MAXFALL = 820, BOUNCE = 930;
 const DEADLY = { blue: 'fc', pink: 'gc' };
-const ITEM_ROLE = { b: 'blue', a: 'blue', p: 'pink', r: 'pink' };
+const ITEM_ROLE = { b: 'blue', a: 'blue', p: 'pink', r: 'pink', s: 'both' };
+const SOLID_CH = '#fgcJ';
+const isSlope = (ch) => ch === '/' || ch === '\\';
 
 function overlap(a, b) { return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y; }
 
@@ -15,13 +17,27 @@ class Level {
     this.outfits = opts.outfits;
     this.onEvent = opts.onEvent;
     this.grid = def.grid;
+    this.GW = this.grid[0].length; this.GH = this.grid.length;
     this.tiles = Art.tileLayer(this.grid, T);
-    this.pools = []; this.bounces = [];
-    for (let y = 0; y < LH; y++) for (let x = 0; x < LW; x++) {
+    this.pools = []; this.bounces = []; this.fakes = [];
+    // caméra : dézoom automatique pour les grandes cartes
+    this.scale = Math.min(1, 960 / (this.GW * T), 640 / (this.GH * T));
+    this.ox = (960 - this.GW * T * this.scale) / 2; this.oy = (640 - this.GH * T * this.scale) / 2;
+    if (this.scale < 1) this.oy = Math.max(this.oy, Math.min(30, 640 - this.GH * T * this.scale));
+    for (let y = 0; y < this.GH; y++) for (let x = 0; x < this.GW; x++) {
       const ch = this.grid[y][x];
       if ('fgc'.includes(ch)) this.pools.push({ x, y, k: ch, l: !'fgc'.includes(this.grid[y][x - 1]), r: !'fgc'.includes(this.grid[y][x + 1]) });
       if (ch === 'J') this.bounces.push({ x, y, sq: 0 });
+      if (ch === 'w') this.fakes.push({ x, y, seen: false });
     }
+    // portée des tirs des tourelles (jusqu'au premier mur)
+    this.turrets = (def.turrets || []).map((tu) => {
+      const d = { l: [-1, 0], r: [1, 0], u: [0, -1], d: [0, 1] }[tu.dir];
+      const mx = tu.x * T + 16 + d[0] * 18, my = tu.y * T + 16 + d[1] * 18;
+      let dist = 0;
+      while (dist < 2000) { const px = mx + d[0] * dist, py = my + d[1] * dist; const tx = Math.floor(px / T), ty = Math.floor(py / T); if (this.solidStatic(tx, ty)) break; dist += 4; }
+      return { ...tu, d, mx, my, range: dist, speed: tu.speed || 170, period: tu.period || 2, offset: tu.offset || 0 };
+    });
     this.gt = 0; // temps global (animations)
     this.sendAcc = 0; this.syncAcc = 0;
     this.particles = [];
@@ -35,14 +51,15 @@ class Level {
     this.t = 0; this.dying = 0; this.doneTimer = 0; this.done = false;
     this.items = []; this.doors = {}; this.spawns = {};
     let id = 0, bi = 0, pi = 0;
-    for (let y = 0; y < LH; y++) for (let x = 0; x < LW; x++) {
+    for (let y = 0; y < this.GH; y++) for (let x = 0; x < this.GW; x++) {
       const ch = this.grid[y][x];
-      if ('bpar'.includes(ch)) {
+      if ('bpars'.includes(ch)) {
         let sub;
         if (ch === 'b') sub = BLUE_ITEMS[(bi++ + d.index) % BLUE_ITEMS.length];
         else if (ch === 'p') sub = PINK_ITEMS[(pi++ + d.index) % PINK_ITEMS.length];
+        else if (ch === 's') sub = 'star';
         else sub = ch === 'a' ? 'plane' : 'ring';
-        this.items.push({ id: id++, ch, role: ITEM_ROLE[ch], sub, rare: ch === 'a' || ch === 'r', cx: x * T + 16, cy: y * T + 16, taken: false });
+        this.items.push({ id: id++, ch, role: ITEM_ROLE[ch], sub, rare: ch === 'a' || ch === 'r', star: ch === 's', cx: x * T + 16, cy: y * T + 16, taken: false });
       }
       if (ch === 'D') this.doors.blue = { x: x * T, y: (y - 1) * T, w: T, h: 2 * T };
       if (ch === 'E') this.doors.pink = { x: x * T, y: (y - 1) * T, w: T, h: 2 * T };
@@ -52,8 +69,10 @@ class Level {
     this.levers = (d.levers || []).map((l) => ({ ...l, on: false }));
     this.buttons = (d.buttons || []).map((b) => ({ ...b, pressed: false, until: -1 }));
     this.fragiles = [];
-    for (let y = 0; y < LH; y++) for (let x = 0; x < LW; x++) if (this.grid[y][x] === 'x') this.fragiles.push({ x, y, state: 'ok', timer: 0 });
-    this.fragMap = {}; for (const f of this.fragiles) this.fragMap[f.y * LW + f.x] = f;
+    for (let y = 0; y < this.GH; y++) for (let x = 0; x < this.GW; x++) if (this.grid[y][x] === 'x') this.fragiles.push({ x, y, state: 'ok', timer: 0 });
+    this.fragMap = {}; for (const f of this.fragiles) this.fragMap[f.y * this.GW + f.x] = f;
+    for (const f of this.fakes) f.seen = false;
+    this.mobs = (d.mobs || []).map((m) => ({ ...m, px: m.x * T, py: m.y * T }));
     this.platforms = (d.platforms || []).map((p) => ({
       x0: p.x * T, y0: p.y * T, w: p.w * T, h: p.h * T, dx: p.dx * T, dy: p.dy * T, on: p.on, vanish: !!p.vanish, invert: !!p.invert,
       p: p.invert ? 1 : 0, x: p.x * T + (p.invert ? p.dx * T : 0), y: p.y * T + (p.invert ? p.dy * T : 0), prevx: p.x * T, prevy: p.y * T, color: TRIGGER_COLORS[p.on[0] % TRIGGER_COLORS.length], solid: true,
@@ -74,10 +93,37 @@ class Level {
   }
 
   solidTile(tx, ty) {
-    if (tx < 0 || ty < 0 || tx >= LW || ty >= LH) return true;
+    if (tx < 0 || ty < 0 || tx >= this.GW || ty >= this.GH) return true;
     const ch = this.grid[ty][tx];
-    if (ch === 'x') return this.fragMap[ty * LW + tx].state !== 'gone';
-    return '#fgcJ'.includes(ch);
+    if (ch === 'x') return this.fragMap[ty * this.GW + tx].state !== 'gone';
+    return SOLID_CH.includes(ch);
+  }
+  solidStatic(tx, ty) {
+    if (tx < 0 || ty < 0 || tx >= this.GW || ty >= this.GH) return true;
+    const ch = this.grid[ty][tx];
+    return SOLID_CH.includes(ch) || isSlope(ch);
+  }
+  tileAt(tx, ty) { return (ty >= 0 && ty < this.GH && tx >= 0 && tx < this.GW) ? this.grid[ty][tx] : '#'; }
+  // hauteur du sol d'une pente à l'abscisse px
+  slopeY(tx, ty, px) {
+    const lx = Math.max(0, Math.min(T, px - tx * T));
+    return this.grid[ty][tx] === '/' ? ty * T + (T - lx) : ty * T + lx;
+  }
+  mobPos(m) {
+    const ph = ((this.t + (m.offset || 0)) / m.period) % 1, tri = ph < 0.5 ? ph * 2 : 2 - ph * 2;
+    return { x: m.px + (m.dx || 0) * T * tri, y: m.py + (m.dy || 0) * T * tri, dir: ph < 0.5 ? 1 : -1 };
+  }
+  shots() {
+    const out = [];
+    for (const tu of this.turrets) {
+      const life = tu.range / tu.speed;
+      const kmax = Math.floor((this.t - tu.offset) / tu.period);
+      for (let k = Math.max(0, Math.floor((this.t - tu.offset - life) / tu.period)); k <= kmax; k++) {
+        const dist = (this.t - (tu.offset + k * tu.period)) * tu.speed;
+        if (dist >= 0 && dist <= tu.range) out.push({ x: tu.mx + tu.d[0] * dist, y: tu.my + tu.d[1] * dist, tu });
+      }
+    }
+    return out;
   }
 
   // Liste des rectangles solides qui touchent r
@@ -151,11 +197,21 @@ class Level {
     }
 
     this.movePlayer(dt, input);
+    if (this.dying > 0) return;
+    // passages secrets : le faux mur devient transparent quand on passe dedans
+    for (const f of this.fakes) if (!f.seen) {
+      const fr = { x: f.x * T, y: f.y * T, w: T, h: T };
+      if (overlap(this.playerRect(me), fr) || overlap(or, fr)) { f.seen = true; Sfx.play('secret'); }
+    }
+    // ennemis : un contact = on recommence
+    const hit = { x: me.x + 3, y: me.y + 3, w: PW - 6, h: PH - 5 };
+    for (const m of this.mobs) { const p = this.mobPos(m); if (overlap(hit, { x: p.x + 4, y: p.y + 10, w: 24, h: 22 })) { this.die(true); return; } }
+    for (const s of this.shots()) if (overlap(hit, { x: s.x - 6, y: s.y - 6, w: 12, h: 12 })) { this.die(true); return; }
 
     // objets
     const mr2 = this.playerRect(me);
     for (const it of this.items) {
-      if (it.taken || it.role !== this.myRole) continue;
+      if (it.taken || (it.role !== this.myRole && it.role !== 'both')) continue;
       if (overlap(mr2, { x: it.cx - 11, y: it.cy - 11, w: 22, h: 22 })) {
         this.takeItem(it.id); Net.send('collect', { id: it.id });
       }
@@ -245,6 +301,9 @@ class Level {
 
     me.x += me.vx * dt;
     for (const s of this.solidsAt(this.playerRect(me))) {
+      // petite marche (haut d'une pente) : on monte au lieu d'être bloqué
+      const step = me.y + PH - s.y;
+      if (s.tile && me.onGround && step > 0 && step <= 14 && !this.solidsAt({ x: me.x, y: s.y - PH, w: PW, h: PH }).length) { me.y = s.y - PH; continue; }
       if (me.vx > 0 || (me.vx === 0 && me.x + PW / 2 < s.x + s.w / 2)) me.x = s.x - PW; else me.x = s.x + s.w;
       me.vx = 0;
     }
@@ -269,9 +328,20 @@ class Level {
         }
       }
     }
+    // pentes : on colle à la surface en diagonale
+    if (me.vy >= 0 && !me.ground) {
+      const fx = me.x + PW / 2, tx = Math.floor(fx / T), fyRow = Math.floor((me.y + PH - 1) / T);
+      for (const ty of [fyRow - 1, fyRow, fyRow + 1]) {
+        if (!isSlope(this.tileAt(tx, ty))) continue;
+        const sy = this.slopeY(tx, ty, fx);
+        if (me.onGround && sy > me.y + PH) continue; // déjà sur un sol plus haut
+        const snap = (wasGround || me.onGround) && !me.jumping && !me.bouncing ? 16 : 0;
+        if (me.y + PH >= sy - snap && me.y + PH <= sy + 18) { me.y = sy - PH; me.onGround = true; me.onSlope = true; break; }
+      }
+    }
     if (me.onGround) me.vy = 0;
     // sol : rebond / pièges
-    if (me.onGround && !me.ground) {
+    if (me.onGround && !me.ground && !isSlope(this.tileAt(Math.floor((me.x + PW / 2) / T), Math.floor((me.y + PH + 1) / T)))) {
       const fy = Math.floor((me.y + PH + 1) / T);
       const xa = Math.floor((me.x + 4) / T), xb = Math.floor((me.x + PW - 4) / T);
       let bounce = null, deadly = false;
@@ -291,10 +361,10 @@ class Level {
     const it = this.items.find((i) => i.id === id);
     if (!it || it.taken) return;
     it.taken = true;
-    Sfx.play(it.rare ? 'rare' : 'collect');
+    Sfx.play(it.rare || it.star ? 'rare' : 'collect');
     for (let i = 0; i < (it.rare ? 18 : 9); i++) {
       const a = Math.random() * Math.PI * 2, s = 40 + Math.random() * 90;
-      this.particles.push({ x: it.cx, y: it.cy, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 40, life: 0.8, max: 0.8, kind: i % 2 ? 'heart' : 'spark', col: it.role === 'pink' ? '#ff6fa8' : '#5aa8f0' });
+      this.particles.push({ x: it.cx, y: it.cy, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 40, life: 0.8, max: 0.8, kind: i % 2 ? 'heart' : 'spark', col: it.star ? '#ffd34d' : it.role === 'pink' ? '#ff6fa8' : '#5aa8f0' });
     }
   }
 
@@ -316,6 +386,8 @@ class Level {
       const n = count(role, false), r = count(role, true);
       res[role] = { got: n.filter((i) => i.taken).length, total: n.length, rare: r.length ? r[0].taken : null, rareSub: r.length ? r[0].sub : null, subs: n.filter((i) => i.taken).map((i) => i.sub) };
     }
+    const st = this.items.filter((i) => i.star);
+    res.stars = { got: st.filter((i) => i.taken).length, total: st.length };
     const all = res.blue.got + res.pink.got, tot = res.blue.total + res.pink.total;
     const ratio = tot ? all / tot : 1, fast = res.time <= res.par;
     res.rank = ratio === 1 && fast ? 'S' : (ratio === 1 || (fast && ratio >= 0.7)) ? 'A' : ratio >= 0.5 ? 'B' : 'C';
@@ -355,6 +427,13 @@ class Level {
   draw(ctx, W, H) {
     const t = this.gt;
     Art.background(ctx, W, H, t, this.def.index);
+    ctx.save(); ctx.translate(this.ox, this.oy); ctx.scale(this.scale, this.scale);
+    this.drawWorld(ctx, t);
+    ctx.restore();
+    this.drawHUD(ctx, W, H);
+  }
+
+  drawWorld(ctx, t) {
     for (const p of this.platforms) {
       if (p.vanish) { ctx.save(); ctx.globalAlpha = 1 - p.p * 0.85; Art.platform(ctx, p.x, p.y, p.w, p.h, p.color); ctx.restore(); }
       else Art.platform(ctx, p.x, p.y, p.w, p.h, p.color);
@@ -362,6 +441,8 @@ class Level {
     ctx.drawImage(this.tiles, 0, 0);
     for (const pl of this.pools) Art.pool(ctx, pl.k, pl.x * T, pl.y * T, T, t, pl.x, pl.l, pl.r);
     for (const b of this.bounces) Art.bounce(ctx, b.x * T, b.y * T, T, t, b.sq);
+    for (const f of this.fakes) Art.fakeWall(ctx, f.x * T, f.y * T, f.seen, this.grid, f.x, f.y);
+    for (const tu of this.turrets) Art.turret(ctx, tu.x * T, tu.y * T, tu.dir, t, ((this.t - tu.offset) % tu.period) / tu.period);
     const mr = this.playerRect(this.me), or = this.playerRect(this.other);
     const inD = (r, role) => { const d = this.doors[role]; return overlap(r, d); };
     Art.door(ctx, this.doors.blue.x, this.doors.blue.y, 'blue', inD(this.myRole === 'blue' ? mr : or, 'blue'), t);
@@ -389,22 +470,24 @@ class Level {
       ctx.save();
       ctx.globalAlpha = 0.65 + 0.25 * Math.sin(t * 4 + it.id);
       const g = ctx.createRadialGradient(it.cx, it.cy + bob, 2, it.cx, it.cy + bob, it.rare ? 26 : 20);
-      g.addColorStop(0, it.role === 'pink' ? 'rgba(255,120,180,0.9)' : 'rgba(110,180,255,0.9)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+      g.addColorStop(0, it.star ? 'rgba(255,215,80,0.95)' : it.role === 'pink' ? 'rgba(255,120,180,0.9)' : 'rgba(110,180,255,0.9)'); g.addColorStop(1, 'rgba(255,255,255,0)');
       ctx.fillStyle = g; ctx.beginPath(); ctx.arc(it.cx, it.cy + bob, it.rare ? 26 : 20, 0, Math.PI * 2); ctx.fill();
       ctx.restore();
-      Art.item(ctx, it.sub, it.cx, it.cy + bob, t, it.rare ? 28 : 24);
+      Art.item(ctx, it.sub, it.cx, it.cy + bob, t, it.rare || it.star ? 28 : 24);
     }
     for (const u of this.unicorns) Art.unicorn(ctx, u.x, u.y, u.w, t + u.x0, u.dir);
+    for (const m of this.mobs) { const p = this.mobPos(m); Art.gelee(ctx, p.x, p.y, t, p.dir * Math.sign(m.dx || 1)); }
+    for (const sh of this.shots()) Art.shot(ctx, sh.x, sh.y, t);
     // joueurs
     const drawP = (o, role, isMe) => {
-      Art.teddy(ctx, o.x + PW / 2, o.y + PH, role, { face: o.face, walk: o.walk, air: isMe ? !o.onGround : o.air, outfit: this.outfits[role], t, scale: 1.08, dead: o.dead });
-      ctx.save(); ctx.font = 'bold 11px "Trebuchet MS", sans-serif'; ctx.textAlign = 'center';
+      Art.teddy(ctx, o.x + PW / 2, o.y + PH, role, { face: o.face, walk: o.walk, air: isMe ? !o.onGround : o.air, outfit: this.outfits[role], t, scale: 0.95, dead: o.dead });
+      ctx.save(); ctx.font = `bold ${Math.round(11 / this.scale)}px "Trebuchet MS", sans-serif`; ctx.textAlign = 'center';
       ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.fillStyle = COLORS[role].dark;
-      const ny = o.y - 20;
+      const ny = o.y - 18;
       ctx.strokeText(this.names[role], o.x + PW / 2, ny); ctx.fillText(this.names[role], o.x + PW / 2, ny);
       ctx.restore();
       const bb = this.bubbles[role];
-      if (bb && bb.until > t) Art.bubble(ctx, o.x + PW / 2, o.y - 30, bb.text);
+      if (bb && bb.until > t) { ctx.save(); ctx.translate(o.x + PW / 2, o.y - 26); ctx.scale(1 / this.scale, 1 / this.scale); Art.bubble(ctx, 0, 0, bb.text); ctx.restore(); }
     };
     drawP(this.other, this.otherRole, false);
     drawP(this.me, this.myRole, true);
@@ -415,7 +498,6 @@ class Level {
       else { ctx.fillStyle = p.col; ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, Math.PI * 2); ctx.fill(); }
       ctx.restore();
     }
-    this.drawHUD(ctx, W, H);
   }
 
   drawHUD(ctx, W, H) {
@@ -434,6 +516,8 @@ class Level {
     const cnt = (role) => { const n = this.items.filter((i) => i.role === role && !i.rare); return `${n.filter((i) => i.taken).length}/${n.length}`; };
     Art.item(ctx, 'gpu', W - 160, 17, this.gt, 16); ctx.fillStyle = COLORS.blue.dark; ctx.fillText(cnt('blue'), W - 112, 17);
     Art.item(ctx, 'lipstick', W - 90, 17, this.gt, 16); ctx.fillStyle = COLORS.pink.dark; ctx.fillText(cnt('pink'), W - 30, 17);
+    const st = this.items.filter((i) => i.star);
+    if (st.length) { Art.item(ctx, 'star', W - 236, 17, this.gt, 16); ctx.fillStyle = '#c9971a'; ctx.fillText(`${st.filter((i) => i.taken).length}/${st.length}`, W - 190, 17); }
     ctx.restore();
     if (this.hintTimer > 0 && this.def.hint) {
       ctx.save(); ctx.globalAlpha = Math.min(1, this.hintTimer);

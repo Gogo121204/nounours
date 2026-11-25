@@ -294,6 +294,13 @@ Art.item = function (ctx, kind, cx, cy, t, size) {
       Art.sparkle(ctx, 6, -9, 3 + Math.sin(t * 6) * 1, '#fff');
       break;
     }
+    case 'star': {
+      ctx.rotate(Math.sin(t * 2) * 0.2);
+      ctx.fillStyle = '#ffd84d'; ctx.strokeStyle = '#1f141f'; ctx.lineWidth = 2;
+      ctx.beginPath(); for (let k = 0; k < 10; k++) { const an = -Math.PI / 2 + k * Math.PI / 5, rr = k % 2 ? 4.5 : 11; ctx.lineTo(Math.cos(an) * rr, Math.sin(an) * rr); } ctx.closePath(); ctx.fill(); ctx.stroke();
+      ell(ctx, -3, -3, 2, 1.2, 'rgba(255,255,255,0.8)');
+      break;
+    }
     case 'plane': {
       ctx.rotate(-0.15);
       ctx.fillStyle = '#f4f7ff'; ctx.strokeStyle = '#8aa0d6'; ctx.lineWidth = 1;
@@ -434,14 +441,15 @@ Art.tileLayer = function (grid, T) {
   const cv = document.createElement('canvas'); cv.width = W * T; cv.height = H * T;
   const ctx = cv.getContext('2d');
   const at = (x, y) => (y >= 0 && y < H && x >= 0 && x < W ? grid[y][x] : '#');
-  const solid = (x, y) => '#fgcJ'.includes(at(x, y));
+  const solid = (x, y) => '#fgcJw/\\'.includes(at(x, y));
   const pool = (x, y) => 'fgc'.includes(at(x, y));
+  const fill = (x, y) => '#fgc'.includes(at(x, y));
   let seed = 3; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
   const D = 12; // profondeur des bassins
   // 1) remplissage
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const ch = at(x, y);
-    if (!solid(x, y) || ch === 'J') continue;
+    if (!fill(x, y)) continue;
     const px = x * T, py = y * T;
     ctx.fillStyle = STONE; ctx.fillRect(px, py, T, T);
     // joints de pierre
@@ -461,7 +469,7 @@ Art.tileLayer = function (grid, T) {
   // 2) contours noirs sur les bords exposés
   ctx.strokeStyle = OUT; ctx.lineWidth = 3; ctx.lineCap = 'round';
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    if (!solid(x, y) || at(x, y) === 'J') continue;
+    if (!fill(x, y)) continue;
     const px = x * T, py = y * T;
     const P = pool(x, y);
     ctx.beginPath();
@@ -477,9 +485,42 @@ Art.tileLayer = function (grid, T) {
       const l = !pool(x - 1, y), r = !pool(x + 1, y);
       ctx.moveTo(px, py + (l ? 1.5 : D)); if (l) ctx.lineTo(px + 9, py + D); ctx.lineTo(px + T - (r ? 9 : 0), py + D); if (r) ctx.lineTo(px + T, py + 1.5);
     }
-    const sideL = !solid(x - 1, y) || at(x - 1, y) === 'J', sideR = !solid(x + 1, y) || at(x + 1, y) === 'J';
+    const sideL = !solid(x - 1, y) || at(x - 1, y) === 'J' || at(x - 1, y) === '\\', sideR = !solid(x + 1, y) || at(x + 1, y) === 'J' || at(x + 1, y) === '/';
     if (sideL) { ctx.moveTo(px + 1.5, py); ctx.lineTo(px + 1.5, py + T); }
     if (sideR) { ctx.moveTo(px + T - 1.5, py); ctx.lineTo(px + T - 1.5, py + T); }
+    if (!solid(x, y + 1)) { ctx.moveTo(px, py + T - 1.5); ctx.lineTo(px + T, py + T - 1.5); }
+    ctx.stroke();
+  }
+  // 2b) pentes (triangles de nuage-guimauve au gros contour)
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const ch = at(x, y);
+    if (ch !== '/' && ch !== '\\') continue;
+    const px = x * T, py = y * T, up = ch === '/';
+    if (!solid(x, y + 1)) { // passerelle en diagonale (sans remplissage dessous)
+      const th = 11;
+      ctx.fillStyle = STONE; ctx.beginPath();
+      if (up) { ctx.moveTo(px, py + T); ctx.lineTo(px + T, py); ctx.lineTo(px + T, py + th); ctx.lineTo(px, py + T + th); }
+      else { ctx.moveTo(px, py); ctx.lineTo(px + T, py + T); ctx.lineTo(px + T, py + T + th); ctx.lineTo(px, py + th); }
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = STONE_L; ctx.lineWidth = 4; ctx.beginPath();
+      if (up) { ctx.moveTo(px, py + T - 3); ctx.lineTo(px + T, py - 3 + 6); } else { ctx.moveTo(px, py + 3); ctx.lineTo(px + T, py + T + 3); }
+      ctx.stroke();
+      ctx.strokeStyle = OUT; ctx.lineWidth = 3; ctx.beginPath();
+      if (up) { ctx.moveTo(px - 1, py + T + 1); ctx.lineTo(px + T + 1, py - 1); ctx.moveTo(px - 1, py + T + th + 1); ctx.lineTo(px + T + 1, py + th - 1); }
+      else { ctx.moveTo(px - 1, py - 1); ctx.lineTo(px + T + 1, py + T + 1); ctx.moveTo(px - 1, py + th - 1); ctx.lineTo(px + T + 1, py + T + th + 1); }
+      ctx.stroke();
+      continue;
+    }
+    ctx.fillStyle = STONE; ctx.beginPath();
+    if (up) { ctx.moveTo(px, py + T); ctx.lineTo(px + T, py); ctx.lineTo(px + T, py + T); }
+    else { ctx.moveTo(px, py); ctx.lineTo(px + T, py + T); ctx.lineTo(px, py + T); }
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = STONE_L; ctx.lineWidth = 5; ctx.beginPath();
+    if (up) { ctx.moveTo(px + 2, py + T - 3); ctx.lineTo(px + T - 1, py + 4); } else { ctx.moveTo(px + 1, py + 4); ctx.lineTo(px + T - 2, py + T - 3); }
+    ctx.stroke();
+    ctx.strokeStyle = OUT; ctx.lineWidth = 3; ctx.beginPath();
+    if (up) { ctx.moveTo(px, py + T); ctx.lineTo(px + T, py); if (!solid(x + 1, y)) { ctx.lineTo(px + T, py + T); } }
+    else { ctx.moveTo(px + T, py + T); ctx.lineTo(px, py); if (!solid(x - 1, y)) { ctx.lineTo(px, py + T); } }
     if (!solid(x, y + 1)) { ctx.moveTo(px, py + T - 1.5); ctx.lineTo(px + T, py + T - 1.5); }
     ctx.stroke();
   }
@@ -604,6 +645,70 @@ Art.fragile = function (ctx, px, py, state, timer, t) {
   if (state === 'gone') ctx.setLineDash([4, 4]);
   ctx.stroke();
   if (state !== 'gone') { ctx.strokeStyle = 'rgba(200,120,170,0.7)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(12, 14); ctx.lineTo(15, 18); ctx.lineTo(13, 22); ctx.stroke(); }
+  ctx.restore();
+};
+
+
+// Faux mur (passage secret) : identique à un bloc… avec une petite paillette de temps en temps
+Art.fakeWall = function (ctx, px, py, seen, grid, x, y) {
+  const at = (xx, yy) => (yy >= 0 && yy < grid.length && xx >= 0 && xx < grid[0].length ? grid[yy][xx] : '#');
+  const sol = (xx, yy) => '#fgcJw/\\'.includes(at(xx, yy));
+  ctx.save();
+  ctx.globalAlpha = seen ? 0.3 : 1;
+  ctx.fillStyle = STONE; ctx.fillRect(px, py, T, T);
+  if (!sol(x, y - 1)) { ctx.fillStyle = STONE_L; ctx.fillRect(px, py + 2, T, 5); }
+  if (!sol(x, y + 1)) { ctx.fillStyle = STONE_D; ctx.fillRect(px, py + T - 6, T, 6); }
+  ctx.strokeStyle = OUT; ctx.lineWidth = 3; if (seen) ctx.setLineDash([5, 5]);
+  ctx.beginPath();
+  if (!sol(x, y - 1)) { ctx.moveTo(px, py + 1.5); ctx.lineTo(px + T, py + 1.5); }
+  if (!sol(x, y + 1)) { ctx.moveTo(px, py + T - 1.5); ctx.lineTo(px + T, py + T - 1.5); }
+  if (!sol(x - 1, y)) { ctx.moveTo(px + 1.5, py); ctx.lineTo(px + 1.5, py + T); }
+  if (!sol(x + 1, y)) { ctx.moveTo(px + T - 1.5, py); ctx.lineTo(px + T - 1.5, py + T); }
+  ctx.stroke(); ctx.restore();
+  const tw = (performance.now() / 1000 + x * 1.7 + y * 2.3) % 6;
+  if (!seen && tw < 0.35) { ctx.save(); ctx.globalAlpha = 0.9 * Math.sin(tw / 0.35 * Math.PI); Art.sparkle(ctx, px + 22, py + 10, 4, '#fff'); ctx.restore(); }
+};
+
+// Nuage grognon (tourelle) qui crache des boules d'orage
+Art.turret = function (ctx, px, py, dir, t, phase) {
+  ctx.save(); ctx.translate(px + 16, py + 16);
+  const warn = phase > 0.8;
+  const sc = 1 + (warn ? Math.sin(t * 40) * 0.05 : 0);
+  ctx.scale(sc, sc);
+  const a = { r: 0, d: Math.PI / 2, l: Math.PI, u: -Math.PI / 2 }[dir];
+  // canon
+  ctx.save(); ctx.rotate(a); ctx.fillStyle = '#4a3a5a'; ctx.strokeStyle = OUT; ctx.lineWidth = 2.5;
+  Art.roundRect(ctx, 8, -6, 14, 12, 3); ctx.fill(); ctx.stroke(); ctx.restore();
+  // nuage
+  ctx.fillStyle = warn ? '#8a6aa8' : '#6d5a86'; ctx.strokeStyle = OUT; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.arc(-8, 3, 9, Math.PI * 0.5, Math.PI * 1.5); ctx.arc(0, -6, 11, Math.PI, Math.PI * 2); ctx.arc(9, 3, 9, Math.PI * 1.5, Math.PI * 0.5); ctx.closePath(); ctx.fill(); ctx.stroke();
+  // yeux fâchés
+  ctx.strokeStyle = OUT; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(-8, -6); ctx.lineTo(-2, -3); ctx.moveTo(8, -6); ctx.lineTo(2, -3); ctx.stroke();
+  ell(ctx, -5, 0, 2, 2.4, '#fff3a0'); ell(ctx, 5, 0, 2, 2.4, '#fff3a0');
+  ctx.beginPath(); ctx.arc(0, 8, 3, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
+  ctx.restore();
+};
+
+Art.shot = function (ctx, x, y, t) {
+  ctx.save(); ctx.shadowColor = '#ffe066'; ctx.shadowBlur = 10;
+  ell(ctx, x, y, 6, 6, '#ffd84d', OUT, 2);
+  ctx.shadowBlur = 0; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(x - 2, y - 3); ctx.lineTo(x + 1, y); ctx.lineTo(x - 1, y + 1); ctx.lineTo(x + 2, y + 4); ctx.stroke();
+  ctx.restore();
+};
+
+// Gelée de réglisse grincheuse qui patrouille
+Art.gelee = function (ctx, px, py, t, dir) {
+  const sq = Math.sin(t * 8) * 2;
+  ctx.save(); ctx.translate(px + 16, py + 32);
+  ctx.fillStyle = 'rgba(70,30,80,0.92)'; ctx.strokeStyle = OUT; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.moveTo(-13 - sq / 2, 0); ctx.quadraticCurveTo(-14, -20 - sq, 0, -22 - sq); ctx.quadraticCurveTo(14, -20 - sq, 13 + sq / 2, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ell(ctx, -5, -15 - sq, 3, 2, 'rgba(255,255,255,0.35)');
+  const ex = dir > 0 ? 2 : -2;
+  ell(ctx, -4 + ex, -11 - sq / 2, 2.6, 3, '#fff'); ell(ctx, 4 + ex, -11 - sq / 2, 2.6, 3, '#fff');
+  ell(ctx, -4 + ex * 1.4, -10 - sq / 2, 1.2, 1.5, OUT); ell(ctx, 4 + ex * 1.4, -10 - sq / 2, 1.2, 1.5, OUT);
+  ctx.strokeStyle = OUT; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(-7 + ex, -16 - sq / 2); ctx.lineTo(-2 + ex, -14 - sq / 2); ctx.moveTo(7 + ex, -16 - sq / 2); ctx.lineTo(2 + ex, -14 - sq / 2); ctx.stroke();
   ctx.restore();
 };
 

@@ -5,6 +5,11 @@ const MG_INFO = [
   { id: 'palet', name: 'Palet sur nuage', rules: '3 palets chacun. Visez avec la souris, gardez le clic enfoncé : la jauge de puissance monte et descend. Relâchez au bon moment ! Le palet le plus proche du cœur gagne.' },
   { id: 'quiestce', name: 'Qui est-ce ?', rules: 'Chacun a un personnage secret. À votre tour, posez une question (les cartes s\'éliminent toutes seules) ou tentez de deviner. Mauvaise réponse = défaite !' },
   { id: 'hockey', name: 'Air hockey', rules: 'Déplacez votre palet avec la souris (moitié du bas). Premier à 5 buts !' },
+  { id: 'pfc', name: 'Pierre-feuille-ciseaux', rules: 'Choisissez en secret pierre, feuille ou ciseaux. Les choix se révèlent en même temps. Premier à 3 manches !' },
+  { id: 'memory', name: 'Memory des doudous', rules: 'Retournez deux cartes : une paire = un point et on rejoue. Sinon c\'est à l\'autre. Le plus de paires gagne !' },
+  { id: 'p4', name: 'Puissance 4', rules: 'Cliquez sur une colonne pour lâcher votre jeton. Alignez-en 4 (ligne, colonne ou diagonale) pour gagner !' },
+  { id: 'course', name: 'Course de licornes', rules: 'Appuyez le plus vite possible en ALTERNANT ← et → (ou Q et D) pour faire galoper votre licorne. Premier à l\'arc-en-ciel !' },
+  { id: 'ballons', name: 'Tir aux ballons', rules: '30 secondes ! Cliquez sur les ballons : normal = 1 point, doré = 3 points, nuage d\'orage = −2. Le premier qui clique le prend !' },
 ];
 
 function rng(seed) { return function () { seed |= 0; seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
@@ -566,4 +571,219 @@ class HockeyGame extends MiniGame {
   }
 }
 
-const MG_CLASSES = [DuelGame, YamsGame, PaletGame, QuiEstCeGame, HockeyGame];
+
+
+// ---------------- 6. PIERRE-FEUILLE-CISEAUX ----------------
+const PFC = [['Pierre', '🪨'], ['Feuille', '📄'], ['Ciseaux', '✂️']];
+class PfcGame extends MiniGame {
+  constructor(o) { super(o); this.wins = { blue: 0, pink: 0 }; this.picks = {}; this.myPick = null; this.reveal = null; this.msg = ''; }
+  pick(c) { if (this.myPick != null || this.reveal) return; this.myPick = c; this.send({ t: 'pick', role: this.myRole, c }); this.onPick(this.myRole, c); }
+  onPick(role, c) {
+    if (!Net.isHost) return; this.picks[role] = c;
+    if (this.picks.blue != null && this.picks.pink != null) {
+      const b = this.picks.blue, p = this.picks.pink;
+      const w = b === p ? 'tie' : ((b + 1) % 3 === p ? 'pink' : 'blue');
+      const d = { t: 'res', picks: { ...this.picks }, w }; this.send(d); this.applyRes(d);
+      setTimeout(() => { if (this.wins.blue >= 3) this.end('blue'); else if (this.wins.pink >= 3) this.end('pink'); else { this.send({ t: 'next' }); this.next(); } }, 2300);
+    }
+  }
+  applyRes(d) { this.reveal = d; if (d.w !== 'tie') this.wins[d.w]++; this.msg = d.w === 'tie' ? 'Égalité !' : `${this.names[d.w]} remporte la manche !`; Sfx.play(d.w === this.myRole ? 'goal' : d.w === 'tie' ? 'click' : 'lose'); }
+  next() { this.picks = {}; this.myPick = null; this.reveal = null; this.msg = ''; }
+  update(dt) { this.t += dt; }
+  onNet(d) { if (this.netBase(d)) return; if (d.t === 'pick') this.onPick(d.role, d.c); if (d.t === 'res') this.applyRes(d); if (d.t === 'next') this.next(); }
+  draw(ctx, W, H) {
+    this.bg(ctx, W, H); this.scoreBar(ctx, W, this.wins.blue, this.wins.pink, 'Premier à 3');
+    if (!this.started) { this.drawIntro(ctx, W, H); return; }
+    UI.panel(ctx, 140, 100, 680, 460);
+    for (const [role, x] of [['blue', 300], ['pink', 660]]) {
+      Art.teddy(ctx, x, 330, role, { scale: 3, outfit: this.outfits[role], t: this.t, face: role === 'blue' ? 1 : -1 });
+      const shown = this.reveal ? this.reveal.picks[role] : (role === this.myRole ? this.myPick : null);
+      ctx.save(); ctx.font = '64px "Segoe UI Emoji","Apple Color Emoji",sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      if (shown != null) ctx.fillText(PFC[shown][1], x, 175 + Math.sin(this.t * 6) * 3);
+      else UI.text(ctx, this.reveal ? '' : (role === this.myRole ? 'À toi de choisir !' : 'Réfléchit… 🤔'), x, 175, 18, COLORS[role].dark);
+      ctx.restore();
+    }
+    if (this.msg) UI.text(ctx, this.msg, W / 2, 380, 22, '#7a3f8e');
+    if (this.ready && this.myPick == null && !this.reveal) PFC.forEach(([n, e], i) => UI.btn(ctx, 220 + i * 180, 440, 160, 70, `${e} ${n}`, () => this.pick(i), { size: 20, color: ['#b9a0f5', '#8fd3ff', '#ff9fd0'][i] }));
+    else if (!this.reveal) UI.text(ctx, 'En attente du choix de l\'autre…', W / 2, 470, 18, '#a070b0');
+  }
+}
+
+// ---------------- 7. MEMORY ----------------
+const MEM_ICONS = ['gpu', 'ram', 'cpu', 'fan', 'lipstick', 'mascara', 'palette', 'doudou'];
+class MemoryGame extends MiniGame {
+  constructor(o) { super(o); this.deck = []; this.open = []; this.found = {}; this.turn = 'blue'; this.score = { blue: 0, pink: 0 }; this.lock = false; }
+  startData() {
+    const d = [...MEM_ICONS, ...MEM_ICONS];
+    for (let i = d.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [d[i], d[j]] = [d[j], d[i]]; }
+    return { deck: d };
+  }
+  onStart(d) { this.deck = d.deck; }
+  get myTurn() { return this.ready && !this.result && !this.lock && this.turn === this.myRole && this.deck.length; }
+  flip(i) { if (this.open.includes(i) || this.found[i]) return; this.send({ t: 'flip', i }); this.applyFlip(i); }
+  applyFlip(i) {
+    this.open.push(i); Sfx.play('click');
+    if (this.open.length === 2) {
+      const [a, b] = this.open;
+      this.lock = true;
+      if (this.deck[a] === this.deck[b]) {
+        setTimeout(() => { this.found[a] = this.turn; this.found[b] = this.turn; this.score[this.turn]++; this.open = []; this.lock = false; Sfx.play('collect'); this.checkEnd(); }, 600);
+      } else setTimeout(() => { this.open = []; this.lock = false; this.turn = this.turn === 'blue' ? 'pink' : 'blue'; }, 1100);
+    }
+  }
+  checkEnd() {
+    if (Object.keys(this.found).length === 16 && Net.isHost) { const b = this.score.blue, p = this.score.pink; setTimeout(() => this.end(b > p ? 'blue' : p > b ? 'pink' : 'tie'), 900); }
+  }
+  update(dt) { this.t += dt; }
+  onNet(d) { if (this.netBase(d)) return; if (d.t === 'flip') this.applyFlip(d.i); }
+  draw(ctx, W, H) {
+    this.bg(ctx, W, H); this.scoreBar(ctx, W, this.score.blue, this.score.pink, this.started && this.deck.length ? (this.myTurn ? 'À toi !' : `Tour de ${this.names[this.turn]}`) : '');
+    if (!this.started || !this.deck.length) { this.drawIntro(ctx, W, H); return; }
+    const cw = 104, chh = 118, x0 = W / 2 - (4 * cw + 3 * 14) / 2, y0 = 92;
+    this.deck.forEach((ic, i) => {
+      const x = x0 + (i % 4) * (cw + 14), y = y0 + Math.floor(i / 4) * (chh + 12);
+      const up = this.open.includes(i) || this.found[i];
+      ctx.save(); Art.roundRect(ctx, x, y, cw, chh, 14);
+      ctx.fillStyle = up ? (this.found[i] ? COLORS[this.found[i]].light : '#fff') : '#c9a8f0'; ctx.fill();
+      ctx.lineWidth = 3; ctx.strokeStyle = '#1f141f'; ctx.stroke();
+      if (up) Art.item(ctx, ic, x + cw / 2, y + chh / 2, this.t, 52);
+      else { Art.heart(ctx, x + cw / 2, y + chh / 2, 34, '#ffd1ea'); }
+      ctx.restore();
+      if (this.myTurn && !up) UI.hits.push({ x, y, w: cw, h: chh, cb: () => this.flip(i) });
+    });
+  }
+}
+
+// ---------------- 8. PUISSANCE 4 ----------------
+class P4Game extends MiniGame {
+  constructor(o) { super(o); this.g = Array.from({ length: 6 }, () => Array(7).fill(null)); this.turn = 'blue'; this.win = null; this.anim = null; }
+  get myTurn() { return this.ready && !this.result && !this.win && this.turn === this.myRole; }
+  drop(c) { if (this.g[0][c]) return; this.send({ t: 'drop', c }); this.applyDrop(c); }
+  applyDrop(c) {
+    let r = 5; while (r >= 0 && this.g[r][c]) r--; if (r < 0) return;
+    this.g[r][c] = this.turn; this.anim = { r, c, t: 0 }; Sfx.play('hit');
+    const line = this.check(r, c);
+    if (line) { this.win = { role: this.turn, line }; const w = this.turn; if (Net.isHost) setTimeout(() => this.end(w), 1500); return; }
+    if (this.g[0].every((v) => v)) { if (Net.isHost) setTimeout(() => this.end('tie'), 1200); return; }
+    this.turn = this.turn === 'blue' ? 'pink' : 'blue';
+  }
+  check(r, c) {
+    const who = this.g[r][c];
+    for (const [dr, dc] of [[0, 1], [1, 0], [1, 1], [1, -1]]) {
+      const cells = [[r, c]];
+      for (const s of [1, -1]) { let rr = r + dr * s, cc = c + dc * s; while (rr >= 0 && rr < 6 && cc >= 0 && cc < 7 && this.g[rr][cc] === who) { cells.push([rr, cc]); rr += dr * s; cc += dc * s; } }
+      if (cells.length >= 4) return cells;
+    }
+    return null;
+  }
+  update(dt) { this.t += dt; if (this.anim) this.anim.t += dt; }
+  onNet(d) { if (this.netBase(d)) return; if (d.t === 'drop') this.applyDrop(d.c); }
+  draw(ctx, W, H) {
+    this.bg(ctx, W, H); this.scoreBar(ctx, W, '', '', this.started ? (this.win ? `${this.names[this.win.role]} aligne 4 !` : this.myTurn ? 'À toi !' : `Tour de ${this.names[this.turn]}`) : '');
+    if (!this.started) { this.drawIntro(ctx, W, H); return; }
+    const cs = 70, bx = W / 2 - 3.5 * cs, by = 110;
+    ctx.save(); Art.roundRect(ctx, bx - 14, by - 14, 7 * cs + 28, 6 * cs + 28, 24); ctx.fillStyle = '#b9a0f5'; ctx.fill(); ctx.lineWidth = 4; ctx.strokeStyle = '#1f141f'; ctx.stroke(); ctx.restore();
+    const hoverC = Math.floor((UI.mx - bx) / cs);
+    for (let r = 0; r < 6; r++) for (let c = 0; c < 7; c++) {
+      const cx = bx + c * cs + cs / 2; let cy = by + r * cs + cs / 2;
+      const v = this.g[r][c];
+      if (this.anim && this.anim.r === r && this.anim.c === c) cy = Math.min(cy, by - 30 + this.anim.t * 1400);
+      ctx.beginPath(); ctx.arc(cx, by + r * cs + cs / 2, 27, 0, Math.PI * 2); ctx.fillStyle = '#f4ecff'; ctx.fill(); ctx.lineWidth = 2.5; ctx.strokeStyle = '#1f141f'; ctx.stroke();
+      if (v) { ctx.beginPath(); ctx.arc(cx, cy, 25, 0, Math.PI * 2); ctx.fillStyle = COLORS[v].main; ctx.fill(); ctx.stroke(); Art.heart(ctx, cx, cy + 2, 18, COLORS[v].light); }
+    }
+    if (this.win) for (const [r, c] of this.win.line) { ctx.save(); ctx.lineWidth = 5; ctx.strokeStyle = '#ffd34d'; ctx.beginPath(); ctx.arc(bx + c * cs + cs / 2, by + r * cs + cs / 2, 29, 0, Math.PI * 2); ctx.stroke(); ctx.restore(); }
+    if (this.myTurn) {
+      if (hoverC >= 0 && hoverC < 7) { ctx.save(); ctx.globalAlpha = 0.6; ctx.beginPath(); ctx.arc(bx + hoverC * cs + cs / 2, by - 40, 22, 0, Math.PI * 2); ctx.fillStyle = COLORS[this.myRole].main; ctx.fill(); ctx.restore(); }
+      for (let c = 0; c < 7; c++) UI.hits.push({ x: bx + c * cs, y: by - 70, w: cs, h: 6 * cs + 70, cb: () => this.drop(c) });
+    }
+  }
+}
+
+// ---------------- 9. COURSE DE LICORNES ----------------
+class CourseGame extends MiniGame {
+  constructor(o) { super(o); this.pos = { blue: 0, pink: 0 }; this.last = null; this.sendAcc = 0; this.done = false; }
+  update(dt, input) {
+    this.t += dt;
+    if (!this.ready || this.done) return;
+    const k = input.leftPressed ? 'L' : input.rightPressed ? 'R' : null;
+    if (k && k !== this.last) { this.last = k; this.pos[this.myRole] = Math.min(100, this.pos[this.myRole] + 2.1); Sfx.play('tick'); }
+    this.sendAcc += dt;
+    if (this.sendAcc > 1 / 15) { this.sendAcc = 0; this.send({ t: 'pos', role: this.myRole, v: this.pos[this.myRole] }); }
+    if (this.pos[this.myRole] >= 100) { this.done = true; this.send({ t: 'fin', role: this.myRole }); this.onFin(this.myRole); }
+  }
+  onFin(role) { if (Net.isHost && !this.result) this.end(role); }
+  onNet(d) { if (this.netBase(d)) return; if (d.t === 'pos') this.pos[d.role] = d.v; if (d.t === 'fin') { this.pos[d.role] = 100; this.onFin(d.role); } }
+  draw(ctx, W, H) {
+    this.bg(ctx, W, H); this.scoreBar(ctx, W, Math.round(this.pos.blue) + '%', Math.round(this.pos.pink) + '%', '');
+    if (!this.started) { this.drawIntro(ctx, W, H); return; }
+    // arrivée arc-en-ciel
+    const fx = 820;
+    ['#ff9fd0', '#ffd98a', '#a8ecb0', '#8fd3ff', '#c8a8ff'].forEach((c, i) => { ctx.fillStyle = c; ctx.fillRect(fx + i * 8, 120, 8, 420); });
+    for (const [role, y] of [['blue', 250], ['pink', 450]]) {
+      ctx.save(); ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 3; ctx.setLineDash([12, 12]); ctx.beginPath(); ctx.moveTo(60, y + 30); ctx.lineTo(fx, y + 30); ctx.stroke(); ctx.restore();
+      const x = 60 + (fx - 160) * this.pos[role] / 100;
+      const bob = Math.abs(Math.sin(this.t * 10 + (role === 'pink' ? 1 : 0))) * (this.pos[role] > 0 && this.pos[role] < 100 ? 8 : 0);
+      Art.unicorn(ctx, x, y - bob, 110, this.t * 2, 1);
+      Art.teddy(ctx, x + 50, y - bob + 2, role, { scale: 1.3, outfit: this.outfits[role], t: this.t });
+      UI.text(ctx, this.names[role], 120, y - 50, 16, COLORS[role].dark);
+    }
+    if (this.ready) UI.text(ctx, 'Alterne ← → (ou Q D) le plus vite possible !', W / 2, 600, 18, '#7a3f8e');
+  }
+}
+
+// ---------------- 10. TIR AUX BALLONS ----------------
+class BallonsGame extends MiniGame {
+  constructor(o) { super(o); this.balloons = []; this.popped = {}; this.score = { blue: 0, pink: 0 }; this.elapsed = 0; this.fx = []; }
+  startData() { return { seed: Math.floor(Math.random() * 1e9) }; }
+  onStart(d) {
+    const R = rng(d.seed); this.balloons = [];
+    for (let i = 0; i < 70; i++) {
+      const k = R(); const kind = k < 0.12 ? 'gold' : k < 0.27 ? 'storm' : 'normal';
+      this.balloons.push({ id: i, t0: i * 0.4 + R() * 0.3, x: 90 + R() * 780, sp: 70 + R() * 70 + i * 1.2, sway: R() * 6, kind, col: ['#ff9fd0', '#8fd3ff', '#a8ecb0', '#c8a8ff', '#ffd98a'][Math.floor(R() * 5)] });
+    }
+    this.go = true;
+  }
+  pos(b) { const a = this.elapsed - b.t0; return { x: b.x + Math.sin(a * 2 + b.sway) * 20, y: 660 - a * b.sp, a }; }
+  onMouseDown(x, y) {
+    if (!this.go || this.result || this.elapsed > 30) return;
+    for (const b of this.balloons) {
+      if (this.popped[b.id]) continue; const p = this.pos(b);
+      if (p.a > 0 && Math.hypot(x - p.x, y - p.y) < 30) { this.send({ t: 'try', id: b.id, role: this.myRole }); this.tryPop(b.id, this.myRole); break; }
+    }
+  }
+  tryPop(id, role) { if (!Net.isHost || this.popped[id]) return; this.send({ t: 'pop', id, role }); this.applyPop(id, role); }
+  applyPop(id, role) {
+    if (this.popped[id]) return; this.popped[id] = role;
+    const b = this.balloons[id], p = this.pos(b), pts = b.kind === 'gold' ? 3 : b.kind === 'storm' ? -2 : 1;
+    this.score[role] += pts; this.fx.push({ x: p.x, y: p.y, t: 0, txt: (pts > 0 ? '+' : '') + pts, role });
+    Sfx.play(b.kind === 'storm' ? 'lose' : b.kind === 'gold' ? 'rare' : 'hit');
+  }
+  update(dt) {
+    this.t += dt; if (!this.go) return; this.elapsed += dt;
+    for (const f of this.fx) f.t += dt; this.fx = this.fx.filter((f) => f.t < 0.8);
+    if (Net.isHost && this.elapsed > 30.5 && !this.result) { const b = this.score.blue, p = this.score.pink; this.end(b > p ? 'blue' : p > b ? 'pink' : 'tie'); }
+  }
+  onNet(d) { if (this.netBase(d)) return; if (d.t === 'try') this.tryPop(d.id, d.role); if (d.t === 'pop') this.applyPop(d.id, d.role); }
+  draw(ctx, W, H) {
+    this.bg(ctx, W, H);
+    this.scoreBar(ctx, W, this.score.blue, this.score.pink, this.go ? `⏱ ${Math.max(0, Math.ceil(30 - this.elapsed))} s` : '');
+    if (!this.started) { this.drawIntro(ctx, W, H); return; }
+    for (const b of this.balloons) {
+      if (this.popped[b.id]) continue; const p = this.pos(b); if (p.a < 0 || p.y < -60) continue;
+      ctx.save(); ctx.strokeStyle = 'rgba(60,40,70,0.6)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(p.x, p.y + 30); ctx.quadraticCurveTo(p.x + 6, p.y + 45, p.x, p.y + 60); ctx.stroke();
+      if (b.kind === 'storm') { Art.turret(ctx, p.x - 16, p.y - 16, 'd', this.t, 0); }
+      else {
+        ctx.fillStyle = b.kind === 'gold' ? '#ffd34d' : b.col; ctx.strokeStyle = '#1f141f'; ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.ellipse(p.x, p.y, 24, 29, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.beginPath(); ctx.ellipse(p.x - 8, p.y - 10, 5, 8, -0.4, 0, Math.PI * 2); ctx.fill();
+        if (b.kind === 'gold') Art.sparkle(ctx, p.x + 14, p.y - 18, 5, '#fff');
+        else Art.heart(ctx, p.x, p.y + 4, 14, 'rgba(255,255,255,0.7)');
+      }
+      ctx.restore();
+    }
+    for (const f of this.fx) UI.text(ctx, f.txt + ' ' + this.names[f.role], f.x, f.y - f.t * 40, 18, COLORS[f.role].dark);
+    if (this.go && UI.mx >= 0) { ctx.save(); ctx.strokeStyle = COLORS[this.myRole].dark; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(UI.mx, UI.my, 14, 0, Math.PI * 2); ctx.moveTo(UI.mx - 20, UI.my); ctx.lineTo(UI.mx + 20, UI.my); ctx.moveTo(UI.mx, UI.my - 20); ctx.lineTo(UI.mx, UI.my + 20); ctx.stroke(); ctx.restore(); }
+  }
+}
+
+const MG_CLASSES = [DuelGame, YamsGame, PaletGame, QuiEstCeGame, HockeyGame, PfcGame, MemoryGame, P4Game, CourseGame, BallonsGame];

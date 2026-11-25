@@ -5,12 +5,18 @@
 // Mécanismes (coordonnées en tuiles) : levers, buttons (y = rangée où l'on se tient),
 // platforms {x,y,w,h,dx,dy,on:[ids]}, unicorns {x,y,w,dx,dy,period}
 const LW = 30, LH = 20;
+// Grandes cartes dessinées en texte : chaque ligne = une rangée (bordures comprises)
+function parseAscii(rows) {
+  const W = Math.max(...rows.map((r) => r.length));
+  return rows.map((r) => r.padEnd(W, '.'));
+}
 
-function makeGrid(build) {
+function makeGrid(build, W, H) {
+  W = W || LW; H = H || LH;
   const g = [];
-  for (let y = 0; y < LH; y++) {
+  for (let y = 0; y < H; y++) {
     const row = [];
-    for (let x = 0; x < LW; x++) row.push((x === 0 || x === LW - 1 || y === 0 || y >= LH - 2) ? '#' : '.');
+    for (let x = 0; x < W; x++) row.push((x === 0 || x === W - 1 || y === 0 || y >= H - 2) ? '#' : '.');
     g.push(row);
   }
   const api = {
@@ -60,7 +66,7 @@ const LEVELS = [
       g.s(24, 18, 'f'); g.s(25, 18, 'g');
       g.s(2, 17, '1'); g.s(4, 17, '2');
       g.s(12, 12, 'b'); g.s(18, 10, 'p'); g.s(9, 13, 'p'); g.s(21, 11, 'b');
-      g.s(16, 9, 'a'); g.s(19, 8, 'r');
+      g.s(16, 9, 'a'); g.s(19, 9, 'r');
       g.s(26, 17, 'D'); g.s(28, 17, 'E');
     },
     unicorns: [
@@ -401,4 +407,4 @@ LEVELS.push(
   },
 );
 
-LEVELS.forEach((L, i) => { L.grid = makeGrid(L.build); L.index = i; });
+LEVELS.forEach((L, i) => { L.grid = L.ascii ? parseAscii(L.ascii) : makeGrid(L.build, L.w, L.h); L.index = i; });
