@@ -1,6 +1,8 @@
+
+
 # Nounours & Licornes 🐻🦄
 
-Jeu de plateforme coopératif à deux, en ligne (chacun sur son PC), inspiré du principe « Feu & Eau ».
+https://gogo121204.github.io/nounours/
 
 ## Mettre le jeu en ligne (GitHub Pages, gratuit, ~3 min)
 
