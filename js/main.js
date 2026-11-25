@@ -72,7 +72,7 @@ window.addEventListener('mouseup', (e) => { const p = toCanvas(e); if (G.mg && G
 const $ = (id) => document.getElementById(id);
 const overlay = $('overlay');
 $('name').value = save.name || '';
-let chosenRole = 'pink';
+let chosenRole = 'blue';
 document.querySelectorAll('.role').forEach((b) => b.addEventListener('click', () => {
   chosenRole = b.dataset.role;
   document.querySelectorAll('.role').forEach((x) => x.classList.toggle('sel', x === b));
